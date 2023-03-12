@@ -3,6 +3,7 @@ import json
 import torch.utils.data as data
 import numpy as np
 from PIL import Image
+from torchvision.transforms import ToTensor
 
 import warnings
 
@@ -55,12 +56,12 @@ class GIDDATASET(data.Dataset):
         """
 
         # images
-        images = self._load_image(self.image_paths[index]).convert('RGB')
+        images = ToTensor().__call__(np.array(self._load_image(self.image_paths[index]).convert('RGB')))
         if self.transform is not None:
             images = self.transform(images)
 
         # target
-        target = self._load_target(self.labels[index]).convert('P')
+        target = ToTensor().__call__(np.array(self._load_target(self.labels[index]).convert('P')))
         if self.target_transform is not None:
             target = self.target_transform(target)
 

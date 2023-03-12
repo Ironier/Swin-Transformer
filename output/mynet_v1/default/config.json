@@ -18,7 +18,7 @@ DATA:
   BATCH_SIZE: 128
   CACHE_MODE: part
   DATASET: gid
-  DATA_PATH: D:\MyProjects\GID_processed\
+  DATA_PATH: D:\MyProjects\GID_processed
   IMG_SIZE: 256
   INTERPOLATION: bicubic
   MASK_PATCH_SIZE: 32

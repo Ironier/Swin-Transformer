@@ -1,0 +1,12 @@
+DATA:
+  IMG_SIZE: 256
+  DATASET: gid
+MODEL:
+  TYPE: mynet
+  NAME: mynet_v1
+  DROP_PATH_RATE: 0.5
+  SWINV2:
+    EMBED_DIM: 128
+    DEPTHS: [ 2, 2, 18, 2 ]
+    NUM_HEADS: [ 4, 8, 16, 32 ]
+    WINDOW_SIZE: 8

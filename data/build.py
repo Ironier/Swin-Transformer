@@ -17,6 +17,7 @@ from timm.data import create_transform
 from .cached_image_folder import CachedImageFolder
 from .imagenet22k_dataset import IN22KDATASET
 from .samplers import SubsetRandomSampler
+from .gid_dataset import GIDDATASET
 
 try:
     from torchvision.transforms import InterpolationMode
@@ -45,21 +46,27 @@ def build_loader(config):
     config.defrost()
     dataset_train, config.MODEL.NUM_CLASSES = build_dataset(is_train=True, config=config)
     config.freeze()
-    print(f"local rank {config.LOCAL_RANK} / global rank {dist.get_rank()} successfully build train dataset")
+    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ['WORLD_SIZE'])
+    else:
+        rank=0
+        world_size=1
+    print(f"local rank {config.LOCAL_RANK} / global rank {rank} successfully build train dataset")
     dataset_val, _ = build_dataset(is_train=False, config=config)
-    print(f"local rank {config.LOCAL_RANK} / global rank {dist.get_rank()} successfully build val dataset")
+    print(f"local rank {config.LOCAL_RANK} / global rank {rank} successfully build val dataset")
 
-    num_tasks = dist.get_world_size()
-    global_rank = dist.get_rank()
+    num_tasks = world_size
+    global_rank = rank
     if config.DATA.ZIP_MODE and config.DATA.CACHE_MODE == 'part':
-        indices = np.arange(dist.get_rank(), len(dataset_train), dist.get_world_size())
+        indices = np.arange(rank, len(dataset_train), world_size)
         sampler_train = SubsetRandomSampler(indices)
     else:
         sampler_train = torch.utils.data.DistributedSampler(
             dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
         )
 
-    if config.TEST.SEQUENTIAL:
+    if config.TEST.SEQUENTIAL or world_size<=1:
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
     else:
         sampler_val = torch.utils.data.distributed.DistributedSampler(
@@ -116,6 +123,9 @@ def build_dataset(is_train, config):
             ann_file = prefix + "_map_val.txt"
         dataset = IN22KDATASET(config.DATA.DATA_PATH, ann_file, transform)
         nb_classes = 21841
+    elif config.DATA.DATASET == 'gid':
+        dataset = GIDDATASET(config.DATA.DATA_PATH, transform)
+        nb_classes = 15
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 

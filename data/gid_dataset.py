@@ -4,11 +4,11 @@ import torch.utils.data as data
 import numpy as np
 from PIL import Image
 from torchvision.transforms import ToTensor
-
+import torch
 import warnings
 
 warnings.filterwarnings("ignore", "(Possibly )?corrupt EXIF data", UserWarning)
-
+device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class GIDDATASET(data.Dataset):
     def __init__(self, root, ann_file='', transform=None, target_transform=None):
@@ -65,7 +65,7 @@ class GIDDATASET(data.Dataset):
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return images, target
+        return images.to(device=device), target.to(device=device)
 
     def __len__(self):
         return len(self.image_paths)

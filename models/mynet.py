@@ -637,7 +637,7 @@ class GVIAttentionBlock(nn.Module):
             self.alpha1=nn.Linear(3,self.num_heads,bias=qkv_bias)
             self.alpha2=nn.Linear(3,self.num_heads,bias=qkv_bias)
             self.para=nn.Linear(self.num_heads,3,bias=False)
-            self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((self.num_heads, 1, 1))), requires_grad=True).cuda()
+            self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((self.num_heads, 1, 1))), requires_grad=True)
             self.softmax=nn.Softmax(dim=-1)
 
         def forward(self,x,feature):

@@ -34,7 +34,7 @@ _C.DATA.ZIP_MODE = False
 # Cache Data in Memory, could be overwritten by command line argument
 _C.DATA.CACHE_MODE = 'part'
 # Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.
-_C.DATA.PIN_MEMORY = True
+_C.DATA.PIN_MEMORY = False
 # Number of data loading threads
 _C.DATA.NUM_WORKERS = 8
 

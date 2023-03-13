@@ -35,7 +35,7 @@ def parse_option():
     parser.add_argument('--cfg', type=str, metavar="FILE", help='path to config file', 
                 default='./configs/mynet/mynet_v1.yaml')
     parser.add_argument('--data-path', type=str, metavar="PATH", help='path to dataset', 
-                default='D:\\MyProjects\\GID_processed')
+                default='D:\\MyProjects\\GID_processed\\GID')
     parser.add_argument(
         "--opts",
         help="Modify config options by adding 'KEY VALUE' pairs. ",
@@ -305,6 +305,7 @@ def throughput(data_loader, model, logger):
 
 
 if __name__ == '__main__':
+    torch.multiprocessing.set_start_method('spawn')
     args, config = parse_option()
 
     if config.AMP_OPT_LEVEL:

@@ -11,7 +11,7 @@ import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 import numpy as np
-
+device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
@@ -644,7 +644,7 @@ class GVIAttentionBlock(nn.Module):
             x1=self.alpha1(x) #B H W C
             x2=self.alpha2(x)
             gvi=torch.div(x1,x2) #B H W C //q
-            logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01)).to('cuda')).exp()
+            logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01)).to(device)).exp()
             gvi=torch.mul(gvi,feature) #//q*k
             gvi=self.softmax(torch.mul(gvi,logit_scale))
             gvi=self.para(gvi)
@@ -673,7 +673,7 @@ class UnNamedBlock(nn.Module):
                                         drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
-            self.norm=norm_layer
+            self.norm=norm_layer(3)
 
         def forward(self,x,feature):
             x=self.conv(x)
@@ -696,7 +696,7 @@ class Decoder(nn.Module):
             super().__init__()
             self.img_size = img_size
             self.patch_size = patch_size
-            self.norm=norm_layer
+            self.norm=norm_layer(3)
             num_layers=len(depth)
             self.layers=[]
             for i in range(num_layers):
@@ -707,8 +707,7 @@ class Decoder(nn.Module):
                 self.layers.append(layer)
 
         def forward(self,x,feature):
-            x=x.squeeze(3).transpose(1,2) # B H*W C
-            x=self.norm(x)
+            x=self.norm(x.transpose(1,3))
             for layer in self.layers:
                 x=torch.add(layer(x,feature),x) #residential
             x=x.transpose(1,2).view(self.patch_size,3,self.img_size,self.img_size) # B C H W

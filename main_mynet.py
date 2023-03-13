@@ -162,7 +162,7 @@ def main(config):
 
         train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler,
                         loss_scaler)
-        if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
+        if rank == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
             save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, loss_scaler,
                             logger)
 
@@ -305,7 +305,6 @@ def throughput(data_loader, model, logger):
 
 
 if __name__ == '__main__':
-    torch.multiprocessing.set_start_method('spawn')
     args, config = parse_option()
 
     if config.AMP_OPT_LEVEL:

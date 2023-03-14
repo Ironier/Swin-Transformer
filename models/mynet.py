@@ -636,8 +636,6 @@ class GVIAttentionBlock(nn.Module):
             self.num_heads=1024
             self.alpha1=nn.Linear(3,self.num_heads,bias=qkv_bias)
             self.alpha2=nn.Linear(3,self.num_heads,bias=qkv_bias)
-            self.para=nn.Linear(self.num_heads,3,bias=False)
-            self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((self.num_heads, 1, 1))), requires_grad=True)
             self.softmax=nn.Softmax(dim=-1)
             self.img_size=256
 
@@ -646,14 +644,12 @@ class GVIAttentionBlock(nn.Module):
             x1=self.alpha1(x) #B H W C
             x2=self.alpha2(x)
             gvi=torch.div(x1,x2) #B H W C //q
-            logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01))).exp()
             gvi=gvi.view(-1,self.img_size*self.img_size,self.num_heads)
-            print(gvi.shape)
+            gvi=self.softmax(gvi)
             gvi=torch.bmm(gvi,feature) #//q*k
-            gvi=self.softmax(torch.mul(gvi,logit_scale))
-            gvi=self.para(gvi)
+            gvi=gvi.view(-1,self.img_size,self.img_size,3)
             x=torch.mul(x,gvi) #B H W 3
-            return x
+            return x.transpose(1,3)
 
         def flops(self):
             r'to be done'
@@ -693,7 +689,7 @@ class UnNamedBlock(nn.Module):
             return 0
 
 class Decoder(nn.Module):
-        def __init__(self,img_size=224,patch_size=4,depth=[ 2, 2, 18, 2 ],
+        def __init__(self,img_size=224,patch_size=4,depth=[ 2, 2, 8, 2 ],
                         qkv_bias=True,
                         drop_rate=0.1, attn_drop=0.1,
                         norm_layer=nn.BatchNorm2d):

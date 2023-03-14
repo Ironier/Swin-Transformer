@@ -639,13 +639,17 @@ class GVIAttentionBlock(nn.Module):
             self.para=nn.Linear(self.num_heads,3,bias=False)
             self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((self.num_heads, 1, 1))), requires_grad=True)
             self.softmax=nn.Softmax(dim=-1)
+            self.img_size=256
 
         def forward(self,x,feature):
+            x=x.transpose(1,3)
             x1=self.alpha1(x) #B H W C
             x2=self.alpha2(x)
             gvi=torch.div(x1,x2) #B H W C //q
-            logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01)).to(device)).exp()
-            gvi=torch.mul(gvi,feature) #//q*k
+            logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01))).exp()
+            gvi=gvi.view(-1,self.img_size*self.img_size,self.num_heads)
+            print(gvi.shape)
+            gvi=torch.bmm(gvi,feature) #//q*k
             gvi=self.softmax(torch.mul(gvi,logit_scale))
             gvi=self.para(gvi)
             x=torch.mul(x,gvi) #B H W 3
@@ -661,13 +665,13 @@ class UnNamedBlock(nn.Module):
         def __init__(self,depth=2,
                             qkv_bias=True,
                             drop=0, attn_drop=0,
-                            norm_layer=nn.LayerNorm):
+                            norm_layer=nn.BatchNorm2d):
             super().__init__()
             self.conv=nn.Conv2d(in_channels=3,out_channels=3,kernel_size=3,stride=1,padding=1)
             self.dropout=None
             if(drop>0):
                 self.dropout=nn.Dropout(p=drop)
-            self.layers=[]
+            self.layers=nn.ModuleList()
             for i in range(depth):
                 layer=GVIAttentionBlock(qkv_bias=qkv_bias,
                                         drop=attn_drop,
@@ -692,13 +696,13 @@ class Decoder(nn.Module):
         def __init__(self,img_size=224,patch_size=4,depth=[ 2, 2, 18, 2 ],
                         qkv_bias=True,
                         drop_rate=0.1, attn_drop=0.1,
-                        norm_layer=nn.LayerNorm):
+                        norm_layer=nn.BatchNorm2d):
             super().__init__()
             self.img_size = img_size
             self.patch_size = patch_size
             self.norm=norm_layer(3)
             num_layers=len(depth)
-            self.layers=[]
+            self.layers=nn.ModuleList()
             for i in range(num_layers):
                 layer=UnNamedBlock(depth=depth[i],
                                         qkv_bias=qkv_bias,
@@ -707,7 +711,7 @@ class Decoder(nn.Module):
                 self.layers.append(layer)
 
         def forward(self,x,feature):
-            x=self.norm(x.transpose(1,3))
+            x=self.norm(x)
             for layer in self.layers:
                 x=torch.add(layer(x,feature),x) #residential
             x=x.transpose(1,2).view(self.patch_size,3,self.img_size,self.img_size) # B C H W
@@ -757,6 +761,7 @@ class MyNet(nn.Module):
         self.decoder=Decoder(img_size=img_size, patch_size=patch_size)
 
     def forward(self,x):
+        x=x.transpose(1,3)
         feature=self.swin_backbone(x)
         x=self.decoder(x,feature)
         return x

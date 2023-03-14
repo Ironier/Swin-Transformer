@@ -56,16 +56,16 @@ class GIDDATASET(data.Dataset):
         """
 
         # images
-        images = ToTensor().__call__(np.array(self._load_image(self.image_paths[index]).convert('RGB')))
+        images = np.array(self._load_image(self.image_paths[index]).convert('RGB'),dtype=np.float32)
         if self.transform is not None:
             images = self.transform(images)
 
         # target
-        target = ToTensor().__call__(np.array(self._load_target(self.labels[index]).convert('P')))
+        target = np.array(self._load_target(self.labels[index]).convert('P'),dtype=np.float32)
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return images.to(device=device), target.to(device=device)
+        return images, target
 
     def __len__(self):
         return len(self.image_paths)

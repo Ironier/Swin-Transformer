@@ -633,9 +633,10 @@ class GVIAttentionBlock(nn.Module):
                             drop=0,
                             norm_layer=nn.LayerNorm):
             super().__init__()
-            self.num_heads=1024
+            self.num_heads=16
             self.alpha1=nn.Linear(3,self.num_heads,bias=qkv_bias)
             self.alpha2=nn.Linear(3,self.num_heads,bias=qkv_bias)
+            self.para=nn.Linear(1024,self.num_heads,bias=qkv_bias)
             self.softmax=nn.Softmax(dim=-1)
             self.img_size=256
 
@@ -645,8 +646,8 @@ class GVIAttentionBlock(nn.Module):
             x2=self.alpha2(x)
             gvi=torch.div(x1,x2) #B H W C //q
             gvi=gvi.view(-1,self.img_size*self.img_size,self.num_heads)
-            gvi=self.softmax(gvi)
-            gvi=torch.bmm(gvi,feature) #//q*k
+            temp=self.para(feature.transpose(1,2)).transpose(1,2)
+            gvi=torch.bmm(gvi,temp) #//q*k
             gvi=gvi.view(-1,self.img_size,self.img_size,3)
             x=torch.mul(x,gvi) #B H W 3
             return x.transpose(1,3)
@@ -689,7 +690,7 @@ class UnNamedBlock(nn.Module):
             return 0
 
 class Decoder(nn.Module):
-        def __init__(self,img_size=224,patch_size=4,depth=[ 2, 2, 8, 2 ],
+        def __init__(self,img_size=224,patch_size=4,depth=[ 1, 2, 4, 2 ],
                         qkv_bias=True,
                         drop_rate=0.1, attn_drop=0.1,
                         norm_layer=nn.BatchNorm2d):
@@ -710,7 +711,6 @@ class Decoder(nn.Module):
             x=self.norm(x)
             for layer in self.layers:
                 x=torch.add(layer(x,feature),x) #residential
-            x=x.transpose(1,2).view(self.patch_size,3,self.img_size,self.img_size) # B C H W
             return x
 
         def flops(self):
@@ -755,11 +755,14 @@ class MyNet(nn.Module):
                  norm_layer, ape, patch_norm,
                  use_checkpoint, pretrained_window_sizes)
         self.decoder=Decoder(img_size=img_size, patch_size=patch_size)
+        self.head=nn.Linear(in_features=3,out_features=15)
 
     def forward(self,x):
         x=x.transpose(1,3)
         feature=self.swin_backbone(x)
         x=self.decoder(x,feature)
+        x=x.transpose(1,3)
+        x=self.head(x)
         return x
 
     def flops(self):

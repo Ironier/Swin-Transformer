@@ -61,7 +61,7 @@ class GIDDATASET(data.Dataset):
             images = self.transform(images)
 
         # target
-        target = np.array(self._load_target(self.labels[index]).convert('P'),dtype=np.float32)
+        target = np.expand_dims(np.array(self._load_target(self.labels[index]).convert('P'),dtype=np.float32),-1)
         if self.target_transform is not None:
             target = self.target_transform(target)
 

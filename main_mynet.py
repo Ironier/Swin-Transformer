@@ -18,7 +18,7 @@ import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
-from timm.utils import accuracy, AverageMeter
+from timm.utils import AverageMeter
 
 from config import get_config
 from models import build_model
@@ -141,14 +141,14 @@ def main(config):
 
     if config.MODEL.RESUME:
         max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, loss_scaler, logger)
-        acc1, acc5, loss = validate(config, data_loader_val, model)
+        acc1, loss = validate(config, data_loader_val, model)
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
         if config.EVAL_MODE:
             return
 
     if config.MODEL.PRETRAINED and (not config.MODEL.RESUME):
         load_pretrained(config, model_without_ddp, logger)
-        acc1, acc5, loss = validate(config, data_loader_val, model)
+        acc1, loss = validate(config, data_loader_val, model)
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
 
     if config.THROUGHPUT_MODE:
@@ -166,7 +166,7 @@ def main(config):
             save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, loss_scaler,
                             logger)
 
-        acc1, acc5, loss = validate(config, data_loader_val, model)
+        acc1, loss = validate(config, data_loader_val, model)
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
         max_accuracy = max(max_accuracy, acc1)
         logger.info(f'Max accuracy: {max_accuracy:.2f}%')
@@ -192,14 +192,15 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         samples = samples.cuda(non_blocking=True)
         targets = targets.cuda(non_blocking=True)
 
-        if mixup_fn is not None:
-            samples, targets = mixup_fn(samples, targets)
+        #if mixup_fn is not None:
+        #    samples, targets = mixup_fn(samples, targets)
 
         with torch.cuda.amp.autocast(enabled=config.AMP_ENABLE):
             outputs = model(samples)
 
-        loss = criterion(outputs, targets)
+        loss = criterion(outputs.view(-1,15), targets.view(-1))
         loss = loss / config.TRAIN.ACCUMULATION_STEPS
+
 
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
@@ -236,6 +237,8 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
 
+def accuracy(output,target):
+    return 100*torch.sum(output.argmax(dim=3)==target,dim=[0,1,2])/(output.shape[0]*output.shape[1]*output.shape[2])
 
 @torch.no_grad()
 def validate(config, data_loader, model):
@@ -245,7 +248,6 @@ def validate(config, data_loader, model):
     batch_time = AverageMeter()
     loss_meter = AverageMeter()
     acc1_meter = AverageMeter()
-    acc5_meter = AverageMeter()
 
     end = time.time()
     for idx, (images, target) in enumerate(data_loader):
@@ -257,17 +259,14 @@ def validate(config, data_loader, model):
             output = model(images)
 
         # measure accuracy and record loss
-        loss = criterion(output, target)
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        loss = criterion(output.view(-1,15), target.view(-1))
+        acc1 = accuracy(output, target)
 
-        acc1 = reduce_tensor(acc1)
-        acc5 = reduce_tensor(acc5)
-        loss = reduce_tensor(loss)
+        #acc1 = reduce_tensor(acc1)
+        #loss = reduce_tensor(loss)
 
         loss_meter.update(loss.item(), target.size(0))
         acc1_meter.update(acc1.item(), target.size(0))
-        acc5_meter.update(acc5.item(), target.size(0))
-
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
@@ -279,10 +278,9 @@ def validate(config, data_loader, model):
                 f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                 f'Loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
                 f'Acc@1 {acc1_meter.val:.3f} ({acc1_meter.avg:.3f})\t'
-                f'Acc@5 {acc5_meter.val:.3f} ({acc5_meter.avg:.3f})\t'
                 f'Mem {memory_used:.0f}MB')
-    logger.info(f' * Acc@1 {acc1_meter.avg:.3f} Acc@5 {acc5_meter.avg:.3f}')
-    return acc1_meter.avg, acc5_meter.avg, loss_meter.avg
+    logger.info(f' * Acc@1 {acc1_meter.avg:.3f}')
+    return acc1_meter.avg, loss_meter.avg
 
 
 @torch.no_grad()

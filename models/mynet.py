@@ -631,7 +631,7 @@ class SwinTransformerV2_Backbone(nn.Module):
 class GVIAttentionBlock(nn.Module):
         def __init__(self, qkv_bias=True,
                             drop=0,
-                            norm_layer=nn.LayerNorm):
+                            norm_layer=nn.BatchNorm2d):
             super().__init__()
             self.num_heads=16
             self.alpha1=nn.Linear(3,self.num_heads,bias=qkv_bias)
@@ -639,18 +639,24 @@ class GVIAttentionBlock(nn.Module):
             self.para=nn.Linear(1024,self.num_heads,bias=qkv_bias)
             self.softmax=nn.Softmax(dim=-1)
             self.img_size=256
+            self.eps=1e-5
+            self.norm=norm_layer(3)
 
         def forward(self,x,feature):
             x=x.transpose(1,3)
             x1=self.alpha1(x) #B H W C
-            x2=self.alpha2(x)
-            gvi=torch.div(x1,x2) #B H W C //q
+            x2=self.alpha2(x)+self.eps
+            gvi=torch.clamp(x1/x2,min=1e-5,max=1e2) #B H W C //q
             gvi=gvi.view(-1,self.img_size*self.img_size,self.num_heads)
             temp=self.para(feature.transpose(1,2)).transpose(1,2)
-            gvi=torch.bmm(gvi,temp) #//q*k
+            temp=torch.clamp(temp,min=1e-5,max=1e2)
+            gvi=torch.bmm(gvi,temp)/32 #//q*k
+            gvi=self.softmax(gvi)
             gvi=gvi.view(-1,self.img_size,self.img_size,3)
-            x=torch.mul(x,gvi) #B H W 3
-            return x.transpose(1,3)
+            x=x*gvi #B H W 3
+            x=x.transpose(1,3)
+            x=self.norm(x)
+            return x
 
         def flops(self):
             r'to be done'
@@ -678,11 +684,11 @@ class UnNamedBlock(nn.Module):
 
         def forward(self,x,feature):
             x=self.conv(x)
+            #print(x)
             if self.dropout!=None:
                 x=self.dropout(x)
             for layer in self.layers:
-                x=torch.add(layer(x,feature),x) #residential
-            x=self.norm(x)
+                x=layer(x,feature)+x #residential
             return x
 
         def flops(self):
@@ -706,12 +712,17 @@ class Decoder(nn.Module):
                                         drop=drop_rate, attn_drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
+            self.linear=nn.Linear(len(self.layers),1)
 
         def forward(self,x,feature):
-            x=self.norm(x)
+            res=torch.rand((x.shape[0],x.shape[1],x.shape[2],x.shape[3],len(self.layers))).to(device)
+            cnt=0
             for layer in self.layers:
-                x=torch.add(layer(x,feature),x) #residential
-            return x
+                x=layer(x,feature)+x #residential
+                res[:,:,:,:,cnt]=x
+                cnt+=1
+            res=self.linear(res).squeeze()
+            return res
 
         def flops(self):
             r'to be done'
@@ -758,7 +769,7 @@ class MyNet(nn.Module):
         self.head=nn.Linear(in_features=3,out_features=15)
 
     def forward(self,x):
-        x=x.transpose(1,3)
+        x=x.transpose(1,3) #B C H W
         feature=self.swin_backbone(x)
         x=self.decoder(x,feature)
         x=x.transpose(1,3)

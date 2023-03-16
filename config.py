@@ -63,7 +63,7 @@ _C.MODEL.DROP_RATE = 0.0
 # Drop path rate
 _C.MODEL.DROP_PATH_RATE = 0.1
 # Label Smoothing
-_C.MODEL.LABEL_SMOOTHING = 0.1
+_C.MODEL.LABEL_SMOOTHING = 0
 
 # Swin Transformer parameters
 _C.MODEL.SWIN = CN()
@@ -153,7 +153,7 @@ _C.TRAIN.BASE_LR = 5e-4
 _C.TRAIN.WARMUP_LR = 5e-7
 _C.TRAIN.MIN_LR = 5e-6
 # Clip gradient norm
-_C.TRAIN.CLIP_GRAD = 5.0
+_C.TRAIN.CLIP_GRAD = 10.0
 # Auto resume from latest checkpoint
 _C.TRAIN.AUTO_RESUME = True
 # Gradient accumulation steps
@@ -206,9 +206,9 @@ _C.AUG.REPROB = 0.25
 # Random erase mode
 _C.AUG.REMODE = 'pixel'
 # Random erase count
-_C.AUG.RECOUNT = 1
+_C.AUG.RECOUNT = 0
 # Mixup alpha, mixup enabled if > 0
-_C.AUG.MIXUP = 0.8
+_C.AUG.MIXUP = 0
 # Cutmix alpha, cutmix enabled if > 0
 _C.AUG.CUTMIX = 1.0
 # Cutmix min/max ratio, overrides alpha and enables cutmix if set

@@ -629,11 +629,11 @@ class SwinTransformerV2_Backbone(nn.Module):
         return flops
 
 class GVIAttentionBlock(nn.Module):
-        def __init__(self, qkv_bias=True,
+        def __init__(self, qkv_bias=True,num_head=4,
                             drop=0,
                             norm_layer=nn.BatchNorm2d):
             super().__init__()
-            self.num_heads=16
+            self.num_heads=num_head
             self.alpha1=nn.Linear(3,self.num_heads,bias=qkv_bias)
             self.alpha2=nn.Linear(3,self.num_heads,bias=qkv_bias)
             self.para=nn.Linear(1024,self.num_heads,bias=qkv_bias)
@@ -671,7 +671,7 @@ class GVIAttentionBlock(nn.Module):
 class UnNamedBlock(nn.Module):
         r'this block gives a attention map of the picture'
 
-        def __init__(self,depth=2,
+        def __init__(self,depth=2,num_head=4,
                             qkv_bias=True,
                             drop=0, attn_drop=0,
                             norm_layer=nn.BatchNorm2d):
@@ -684,7 +684,8 @@ class UnNamedBlock(nn.Module):
               self.dropout=None
             self.layers=nn.ModuleList()
             for i in range(depth):
-                layer=GVIAttentionBlock(qkv_bias=qkv_bias,
+                layer=GVIAttentionBlock(
+                    qkv_bias=qkv_bias,num_head=num_head,
                                         drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
@@ -704,7 +705,7 @@ class UnNamedBlock(nn.Module):
             return 0
 
 class Decoder(nn.Module):
-        def __init__(self,img_size=224,patch_size=4,depth=[ 2, 2, 8, 2 ],
+        def __init__(self,img_size=224,patch_size=4,depth=[ 2, 4, 12, 2 ],num_heads=[ 4, 8, 16, 24],
                         qkv_bias=True,
                         drop_rate=0.1, attn_drop=0.1,
                         norm_layer=nn.BatchNorm2d):
@@ -715,7 +716,7 @@ class Decoder(nn.Module):
             num_layers=len(depth)
             self.layers=nn.ModuleList()
             for i in range(num_layers):
-                layer=UnNamedBlock(depth=depth[i],
+                layer=UnNamedBlock(depth=depth[i],num_head=num_heads[i],
                                         qkv_bias=qkv_bias,
                                         drop=drop_rate, attn_drop=attn_drop,
                                         norm_layer=norm_layer)

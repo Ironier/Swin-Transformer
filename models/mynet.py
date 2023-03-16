@@ -641,16 +641,22 @@ class GVIAttentionBlock(nn.Module):
             self.img_size=256
             self.eps=1e-5
             self.norm=norm_layer(3)
+            if(drop>0):
+                self.dropout=nn.Dropout(p=drop)
+            else:
+              self.dropout=None
 
         def forward(self,x,feature):
             x=x.transpose(1,3)
             x1=self.alpha1(x) #B H W C
             x2=self.alpha2(x)+self.eps
-            gvi=torch.clamp(x1/x2,min=1e-5,max=1e2) #B H W C //q
+            gvi=torch.clamp(x1/x2,min=-5,max=5) #B H W C //q
+            if self.dropout!=None:
+                gvi=self.dropout(gvi)
             gvi=gvi.view(-1,self.img_size*self.img_size,self.num_heads)
             temp=self.para(feature.transpose(1,2)).transpose(1,2)
-            temp=torch.clamp(temp,min=1e-5,max=1e2)
-            gvi=torch.bmm(gvi,temp)/32 #//q*k
+            temp=torch.clamp(temp,min=--5,max=5)
+            gvi=torch.bmm(gvi,temp)/gvi.shape[-1] #//q*k
             gvi=self.softmax(gvi)
             gvi=gvi.view(-1,self.img_size,self.img_size,3)
             x=x*gvi #B H W 3
@@ -674,6 +680,8 @@ class UnNamedBlock(nn.Module):
             self.dropout=None
             if(drop>0):
                 self.dropout=nn.Dropout(p=drop)
+            else:
+              self.dropout=None
             self.layers=nn.ModuleList()
             for i in range(depth):
                 layer=GVIAttentionBlock(qkv_bias=qkv_bias,
@@ -683,12 +691,12 @@ class UnNamedBlock(nn.Module):
             self.norm=norm_layer(3)
 
         def forward(self,x,feature):
-            x=self.conv(x)
-            #print(x)
+            #x=self.conv(x)
             if self.dropout!=None:
                 x=self.dropout(x)
             for layer in self.layers:
                 x=layer(x,feature)+x #residential
+            x=self.norm(x)
             return x
 
         def flops(self):
@@ -696,7 +704,7 @@ class UnNamedBlock(nn.Module):
             return 0
 
 class Decoder(nn.Module):
-        def __init__(self,img_size=224,patch_size=4,depth=[ 1, 2, 4, 2 ],
+        def __init__(self,img_size=224,patch_size=4,depth=[ 2, 2, 8, 2 ],
                         qkv_bias=True,
                         drop_rate=0.1, attn_drop=0.1,
                         norm_layer=nn.BatchNorm2d):
@@ -713,16 +721,19 @@ class Decoder(nn.Module):
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
             self.linear=nn.Linear(len(self.layers),1)
+            #self.softmax=nn.Softmax(-1)
 
         def forward(self,x,feature):
-            res=torch.rand((x.shape[0],x.shape[1],x.shape[2],x.shape[3],len(self.layers))).to(device)
+            #res=torch.rand((x.shape[0],x.shape[1],x.shape[2],x.shape[3],len(self.layers))).to(device)
             cnt=0
+            x0=x
             for layer in self.layers:
-                x=layer(x,feature)+x #residential
-                res[:,:,:,:,cnt]=x
+                middle=layer(x,feature)
+                x=middle+x #residential
+                #res[:,:,:,:,cnt]=middle
                 cnt+=1
-            res=self.linear(res).squeeze()
-            return res
+            #res=self.linear(res).squeeze()
+            return x
 
         def flops(self):
             r'to be done'

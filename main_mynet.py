@@ -85,17 +85,21 @@ def parse_option():
 
 
 def main(config):
+    model = build_model(config)
+    model.cuda()
+    model_without_ddp = model
+    print('{} devices in total'.format(torch.cuda.device_count()))
     if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
         rank = int(os.environ["RANK"])
         world_size = int(os.environ['WORLD_SIZE'])
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False, find_unused_parameters=True)
     else:
-        rank=0
+        rank=config.LOCAL_RANK
         world_size=1
 
     dataset_train, dataset_val, data_loader_train, data_loader_val, mixup_fn = build_loader(config)
 
     logger.info(f"Creating model:{config.MODEL.TYPE}/{config.MODEL.NAME}")
-    model = build_model(config)
     logger.info(str(model))
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -104,13 +108,9 @@ def main(config):
         flops = model.flops()
         logger.info(f"number of GFLOPs: {flops / 1e9}")
 
-    model.cuda()
-    model_without_ddp = model
-
     optimizer = build_optimizer(config, model)
-    if world_size>1:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False)
     loss_scaler = NativeScalerWithGradNormCount()
+    
 
     if config.TRAIN.ACCUMULATION_STEPS > 1:
         lr_scheduler = build_scheduler(config, optimizer, len(data_loader_train) // config.TRAIN.ACCUMULATION_STEPS)
@@ -304,6 +304,12 @@ def throughput(data_loader, model, logger):
 
 
 if __name__ == '__main__':
+#     os.environ['CUDA_VISIBLE_DEVICES']='0,1'
+#     os.environ['WORLD_SIZE']='2'
+#     os.environ['RANK']='0'
+#     os.environ['MASTER_ADDR']='localhost'
+#     os.environ['MASTER_PORT']='54321'
+
     args, config = parse_option()
 
     if config.AMP_OPT_LEVEL:
@@ -315,7 +321,6 @@ if __name__ == '__main__':
         print(f"RANK and WORLD_SIZE in environ: {rank}/{world_size}")
         torch.cuda.set_device(config.LOCAL_RANK)
         torch.distributed.init_process_group(backend='nccl', init_method='env://', world_size=world_size, rank=rank)
-        torch.distributed.barrier()
     else:
         rank=0
         world_size=1

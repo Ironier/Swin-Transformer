@@ -579,7 +579,7 @@ class SwinTransformerV2_Backbone(nn.Module):
             self.layers.append(layer)
 
         self.norm = norm_layer(self.num_features)
-        self.avgpool = nn.AdaptiveAvgPool1d(3)
+        self.avgpool = nn.AdaptiveAvgPool1d(1)
 
         self.apply(self._init_weights)
         for bly in self.layers:
@@ -612,7 +612,7 @@ class SwinTransformerV2_Backbone(nn.Module):
             x = layer(x)
 
         x = self.norm(x)  # B L C
-        x = self.avgpool(x.transpose(1, 2))  # B C 3
+        x = self.avgpool(x.transpose(1, 2)) # B C 1
         return x
 
     def forward(self, x):
@@ -629,38 +629,26 @@ class SwinTransformerV2_Backbone(nn.Module):
         return flops
 
 class GVIAttentionBlock(nn.Module):
-        def __init__(self, qkv_bias=True,num_head=4,
+        def __init__(self,embed_dim=96,qkv_bias=True,img_size=256,num_head=6,
                             drop=0,
-                            norm_layer=nn.BatchNorm2d):
+                            norm_layer=nn.LayerNorm):
             super().__init__()
             self.num_heads=num_head
-            self.alpha1=nn.Linear(3,self.num_heads,bias=qkv_bias)
-            self.alpha2=nn.Linear(3,self.num_heads,bias=qkv_bias)
-            self.para=nn.Linear(1024,self.num_heads,bias=qkv_bias)
+            self.conv=nn.Conv1d(embed_dim*8,self.num_heads,kernel_size=3,padding=1,bias=qkv_bias)
             self.softmax=nn.Softmax(dim=-1)
-            self.img_size=256
-            self.eps=1e-5
-            self.norm=norm_layer(3)
+            self.img_size=img_size
+            self.norm=norm_layer(num_head)
             if(drop>0):
                 self.dropout=nn.Dropout(p=drop)
             else:
               self.dropout=None
 
         def forward(self,x,feature):
-            x=x.transpose(1,3)
-            x1=self.alpha1(x) #B H W C
-            x2=self.alpha2(x)+self.eps
-            gvi=torch.clamp(x1/x2,min=-5,max=5) #B H W C //q
-            if self.dropout!=None:
-                gvi=self.dropout(gvi)
-            gvi=gvi.view(-1,self.img_size*self.img_size,self.num_heads)
-            temp=self.para(feature.transpose(1,2)).transpose(1,2)
-            temp=torch.clamp(temp,min=--5,max=5)
-            gvi=torch.bmm(gvi,temp)/gvi.shape[-1] #//q*k
-            gvi=self.softmax(gvi)
-            gvi=gvi.view(-1,self.img_size,self.img_size,3)
-            x=x*gvi #B H W 3
-            x=x.transpose(1,3)
+            temp=self.conv(feature) #B num_heads 1
+            #temp=torch.clamp(temp,min=-5,max=5)
+            temp=torch.bmm(x,temp)/self.num_heads #//q*k
+            temp=self.softmax(temp) #B num_heads 1
+            x=x*temp #B H*W C
             x=self.norm(x)
             return x
 
@@ -671,70 +659,98 @@ class GVIAttentionBlock(nn.Module):
 class UnNamedBlock(nn.Module):
         r'this block gives a attention map of the picture'
 
-        def __init__(self,depth=2,num_head=4,
+        def __init__(self,depth=2,gvi_nums=3,img_size=256,patch_size=4,embed_dim=96,
                             qkv_bias=True,
                             drop=0, attn_drop=0,
-                            norm_layer=nn.BatchNorm2d):
+                            norm_layer=nn.LayerNorm):
             super().__init__()
-            self.conv=nn.Conv2d(in_channels=3,out_channels=3,kernel_size=3,stride=1,padding=1)
+            self.gvi_nums=gvi_nums
+            self.img_size = img_size
+            self.depth=depth
+            self.conv=nn.Conv2d(in_channels=gvi_nums,out_channels=3,kernel_size=3,stride=1,padding=1)
             self.dropout=None
+            self.eps=1e-5
+            self.alpha1=nn.Linear(3,gvi_nums,bias=qkv_bias)
+            self.alpha2=nn.Linear(3,gvi_nums,bias=qkv_bias)
             if(drop>0):
                 self.dropout=nn.Dropout(p=drop)
             else:
               self.dropout=None
+            self.embed_layers=nn.ModuleList()
+            for i in range(depth):
+                embed_layer=PatchMerging(input_resolution=(img_size//(2**i),img_size//(2**i)),dim=gvi_nums*(2**i))
+                self.embed_layers.append(embed_layer)
             self.layers=nn.ModuleList()
             for i in range(depth):
-                layer=GVIAttentionBlock(
-                    qkv_bias=qkv_bias,num_head=num_head,
+                layer=GVIAttentionBlock(embed_dim=embed_dim,qkv_bias=qkv_bias,num_head=gvi_nums*(2**(depth-i)),
                                         drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
-            self.norm=norm_layer(3)
+                layer=nn.ConvTranspose2d(in_channels=gvi_nums*2**(depth-i),out_channels=gvi_nums*2**(depth-i-1),kernel_size=2,padding=0,stride=2)
+                self.layers.append(layer)
+                layer=norm_layer(gvi_nums*2**(depth-i-1))
+                self.layers.append(layer)
+            self.test_conv=nn.Conv2d(in_channels=3,out_channels=gvi_nums,kernel_size=3,padding=1)
+
 
         def forward(self,x,feature):
-            #x=self.conv(x)
+            # x1=self.alpha1(x) #B H W C
+            # x2=self.alpha2(x)+self.eps
+            # x=torch.clamp(x1/x2,min=-5,max=5) #B H W gvi_nums
+            x=self.test_conv(x.transpose(1,3)).transpose(1,3).contiguous()
             if self.dropout!=None:
                 x=self.dropout(x)
-            for layer in self.layers:
-                x=layer(x,feature)+x #residential
-            x=self.norm(x)
-            return x
+            cnt=0
+            x=x.view(-1,self.img_size*self.img_size,self.gvi_nums)
+            for layer in self.embed_layers:
+                x=layer(x) #residential
+                cnt+=1
+            for i in range(cnt):
+                x=x.contiguous().view(-1,self.img_size//(2**(self.depth-i))*self.img_size//(2**(self.depth-i)),self.gvi_nums*(2**(self.depth-i)))
+                x=self.layers[3*i](x,feature) #B H/4*W/4 4*C
+                x=x.transpose(1,2).view(-1,self.gvi_nums*(2**(self.depth-i)),self.img_size//(2**(self.depth-i)),self.img_size//(2**(self.depth-i)))
+                x=self.layers[3*i+1](x).transpose(1,3)
+                x=self.layers[3*i+2](x)+x
+            x=self.conv(x.transpose(1,3))
+            return x.transpose(1,3)
 
         def flops(self):
             r'to be done'
             return 0
 
 class Decoder(nn.Module):
-        def __init__(self,img_size=224,patch_size=4,depth=[ 2, 4, 12, 2 ],num_heads=[ 4, 8, 16, 24],
+        def __init__(self,img_size=224,patch_size=4,depth=[ 2, 4, 8], gvi_nums=[ 16, 4, 2],
+                         embed_dim=96,
                         qkv_bias=True,
                         drop_rate=0.1, attn_drop=0.1,
-                        norm_layer=nn.BatchNorm2d):
+                        norm_layer=nn.LayerNorm):
             super().__init__()
             self.img_size = img_size
-            self.patch_size = patch_size
-            self.norm=norm_layer(3)
-            num_layers=len(depth)
+            #self.patch_size = patch_size
+            self.num_layers=len(depth)
             self.layers=nn.ModuleList()
-            for i in range(num_layers):
-                layer=UnNamedBlock(depth=depth[i],num_head=num_heads[i],
+            for i in range(self.num_layers):
+                layer=UnNamedBlock(depth=depth[i],gvi_nums=gvi_nums[i],img_size=img_size,patch_size=patch_size,embed_dim=embed_dim,
                                         qkv_bias=qkv_bias,
                                         drop=drop_rate, attn_drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
+                self.layers.append(norm_layer(3))
             self.linear=nn.Linear(len(self.layers),1)
-            #self.softmax=nn.Softmax(-1)
+            self.norm=norm_layer(3)
 
         def forward(self,x,feature):
-            #res=torch.rand((x.shape[0],x.shape[1],x.shape[2],x.shape[3],len(self.layers))).to(device)
+            #B H W C
+            res=torch.rand((x.shape[0],x.shape[1],x.shape[2],x.shape[3],len(self.layers))).to(device)
             cnt=0
-            x0=x
-            for layer in self.layers:
-                middle=layer(x,feature)
-                x=middle+x #residential
-                #res[:,:,:,:,cnt]=middle
+            for i in range(self.num_layers):
+                x=self.layers[2*i](x,feature)
+                x=self.layers[2*i+1](x)+x
+                res[:,:,:,:,cnt]=x
                 cnt+=1
-            #res=self.linear(res).squeeze()
-            return x
+            res=self.linear(res).squeeze()
+            res=self.norm(res)
+            return res
 
         def flops(self):
             r'to be done'
@@ -777,15 +793,15 @@ class MyNet(nn.Module):
                  drop_rate, attn_drop_rate, drop_path_rate,
                  norm_layer, ape, patch_norm,
                  use_checkpoint, pretrained_window_sizes)
-        self.decoder=Decoder(img_size=img_size, patch_size=patch_size)
+        self.decoder=Decoder(img_size=img_size, patch_size=patch_size,depth=[ 2, 3, 4], gvi_nums=[32, 8, 2],embed_dim=embed_dim)
         self.head=nn.Linear(in_features=3,out_features=15)
+        self.softmax=nn.Softmax(-1)
 
     def forward(self,x):
-        x=x.transpose(1,3) #B C H W
-        feature=self.swin_backbone(x)
+        feature=self.swin_backbone(x.transpose(1,3))
         x=self.decoder(x,feature)
-        x=x.transpose(1,3)
         x=self.head(x)
+        x=self.softmax(x)
         return x
 
     def flops(self):

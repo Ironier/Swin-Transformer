@@ -711,8 +711,8 @@ class UnNamedBlock(nn.Module):
                 x=x.transpose(1,2).view(-1,self.gvi_nums*(2**(self.depth-i)),self.img_size//(2**(self.depth-i)),self.img_size//(2**(self.depth-i)))
                 x=self.layers[3*i+1](x).transpose(1,3)
                 x=self.layers[3*i+2](x)+x
-            x=self.conv(x.transpose(1,3))
-            return x.transpose(1,3)
+            x=self.conv(x.transpose(1,3)).transpose(1,3)
+            return x #B H W C
 
         def flops(self):
             r'to be done'
@@ -736,19 +736,22 @@ class Decoder(nn.Module):
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
                 self.layers.append(norm_layer(3))
-            self.linear=nn.Linear(len(self.layers),1)
-            self.norm=norm_layer(3)
+            self.conv3d=nn.Conv3d(self.num_layers,1,kernel_size=3,padding=1,stride=1)
+            self.conv2d=nn.Conv2d(3,15,kernel_size=3,padding=1,stride=1)
+            self.softmax=nn.Softmax(-1)
+            self.norm=norm_layer(15)
 
         def forward(self,x,feature):
             #B H W C
-            res=torch.rand((x.shape[0],x.shape[1],x.shape[2],x.shape[3],len(self.layers))).to(device)
+            res=torch.rand((x.shape[0],x.shape[1],x.shape[2],x.shape[3],self.num_layers)).to(device)
             cnt=0
             for i in range(self.num_layers):
                 x=self.layers[2*i](x,feature)
                 x=self.layers[2*i+1](x)+x
                 res[:,:,:,:,cnt]=x
                 cnt+=1
-            res=self.linear(res).squeeze()
+            res=self.conv3d(res.transpose(1,4)).squeeze()
+            res=self.conv2d(res.transpose(1,2)).transpose(1,3)
             res=self.norm(res)
             return res
 
@@ -793,15 +796,11 @@ class MyNet(nn.Module):
                  drop_rate, attn_drop_rate, drop_path_rate,
                  norm_layer, ape, patch_norm,
                  use_checkpoint, pretrained_window_sizes)
-        self.decoder=Decoder(img_size=img_size, patch_size=patch_size,depth=[ 2, 3, 4], gvi_nums=[32, 8, 2],embed_dim=embed_dim)
-        self.head=nn.Linear(in_features=3,out_features=15)
-        self.softmax=nn.Softmax(-1)
+        self.decoder=Decoder(img_size=img_size, patch_size=patch_size,depth=[ 1, 2, 3, 4], gvi_nums=[32, 16, 8, 4],embed_dim=embed_dim)
 
     def forward(self,x):
         feature=self.swin_backbone(x.transpose(1,3))
         x=self.decoder(x,feature)
-        x=self.head(x)
-        x=self.softmax(x)
         return x
 
     def flops(self):

@@ -654,11 +654,11 @@ class GVIAttentionBlock(nn.Module):
 
         def flops(self):
             flops = 0
-            flops+=self.conv.flops()
-            flops+=self.softmax.flops()
-            flops+=self.norm.flops()
-            if self.dropout is not None:
-                flops+=self.dropout.flops
+            # flops+=self.conv.flops()
+            # flops+=self.softmax.flops()
+            # flops+=self.norm.flops()
+            # if self.dropout is not None:
+            #     flops+=self.dropout.flops()
             return flops
 
 class UnNamedBlock(nn.Module):
@@ -716,12 +716,12 @@ class UnNamedBlock(nn.Module):
 
         def flops(self):
             flops=0
-            flops+=self.alpha1.flops()
-            flops+=self.alpha2.flops()
-            flops+=self.test_conv.flops()
-            for layer in self.embed_layers:
-                flops+=layer.flops()
-            flops+=self.conv.flops()
+            # flops+=self.alpha1.flops()
+            # flops+=self.alpha2.flops()
+            # flops+=self.test_conv.flops()
+            # for layer in self.embed_layers:
+            #     flops+=layer.flops()
+            # flops+=self.conv.flops()
             return flops
 
 class Decoder(nn.Module):
@@ -785,11 +785,11 @@ class Decoder(nn.Module):
 
         def flops(self):
             flops=0
-            for layer in self.embed_layers:
-                flops+=layer.flops()
-            flops+=self.conv3d.flops()
-            flops+=self.conv2d.flops()
-            flops+=self.norm.flops()
+            # for layer in self.layers:
+            #     flops+=layer.flops()
+            # flops+=self.conv3d.flops()
+            # flops+=self.conv2d.flops()
+            # flops+=self.norm.flops()
             return flops
 
 

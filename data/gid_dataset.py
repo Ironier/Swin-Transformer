@@ -25,6 +25,8 @@ class GIDDATASET(data.Dataset):
         with open(os.path.join(root,ann_file),'r') as f:
             for file in f.readlines():
                 file=file.strip('\n')
+                if(file==''):
+                    continue
                 self.image_paths.append(os.path.join(self.data_path, '{}.tif'.format(file)))
                 self.labels.append(os.path.join(self.target_path, '{}.tif'.format(file)))
 

@@ -1,4 +1,5 @@
 from .build import build_loader as _build_loader
+from .build import build_test_loader
 from .data_simmim_pt import build_loader_simmim
 from .data_simmim_ft import build_loader_finetune
 

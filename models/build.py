@@ -11,6 +11,8 @@ from .swin_transformer_moe import SwinTransformerMoE
 from .swin_mlp import SwinMLP
 from .simmim import build_simmim
 
+from .mynet import MyNet
+
 
 def build_model(config, is_pretrain=False):
     model_type = config.MODEL.TYPE
@@ -115,8 +117,6 @@ def build_model(config, is_pretrain=False):
                         ape=config.MODEL.SWIN_MLP.APE,
                         patch_norm=config.MODEL.SWIN_MLP.PATCH_NORM,
                         use_checkpoint=config.TRAIN.USE_CHECKPOINT)
-<<<<<<< Updated upstream
-=======
     elif model_type == 'mynet':
         model = MyNet(img_size=config.DATA.IMG_SIZE,
                                   patch_size=config.MODEL.SWINV2.PATCH_SIZE,
@@ -137,7 +137,6 @@ def build_model(config, is_pretrain=False):
                                   decoder_depth=config.MODEL.DECODER.DEPTH,
                                   gvi_nums=config.MODEL.DECODER.GVI_NUMS,
                                   decoder_features=config.MODEL.DECODER.FEATURES)
->>>>>>> Stashed changes
     else:
         raise NotImplementedError(f"Unkown model: {model_type}")
 

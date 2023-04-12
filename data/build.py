@@ -95,7 +95,7 @@ def build_loader(config):
     return dataset_train, dataset_val, data_loader_train, data_loader_val, mixup_fn
 
 
-def build_dataset(is_train, config):
+def build_dataset(is_train, config, is_test=False):
     transform = build_transform(is_train, config)
     if config.DATA.DATASET == 'imagenet':
         prefix = 'train' if is_train else 'val'
@@ -116,6 +116,18 @@ def build_dataset(is_train, config):
             ann_file = prefix + "_map_val.txt"
         dataset = IN22KDATASET(config.DATA.DATA_PATH, ann_file, transform)
         nb_classes = 21841
+<<<<<<< Updated upstream
+=======
+    elif config.DATA.DATASET == 'gid':
+        if is_test:
+            ann_file='test.txt'
+        elif is_train:
+            ann_file='train.txt'
+        else:
+            ann_file='val.txt'
+        dataset = GIDDATASET(config.DATA.DATA_PATH, ann_file, transform)
+        nb_classes = 15
+>>>>>>> Stashed changes
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 

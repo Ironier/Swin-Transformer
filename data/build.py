@@ -15,6 +15,8 @@ from timm.data import Mixup
 from timm.data import create_transform
 from timm.data.random_erasing import RandomErasing
 from timm.data.transforms import ToNumpy
+from typing_extensions import Concatenate
+import albumentations as A
 
 from .cached_image_folder import CachedImageFolder
 from .imagenet22k_dataset import IN22KDATASET
@@ -43,6 +45,31 @@ try:
 except:
     from timm.data.transforms import _pil_interp
 
+def build_test_loader(config):
+    config.defrost()
+    dataset_test, config.MODEL.NUM_CLASSES = build_dataset(is_train=False, config=config, is_test=True)
+    config.freeze()
+    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ['WORLD_SIZE'])
+    else:
+        rank=0
+        world_size=1
+    if config.TEST.SEQUENTIAL or world_size<=1:
+        sampler_val = torch.utils.data.SequentialSampler(dataset_test)
+    else:
+        sampler_val = torch.utils.data.distributed.DistributedSampler(
+            dataset_test, shuffle=config.TEST.SHUFFLE
+        )
+    data_loader_val = torch.utils.data.DataLoader(
+        dataset_test, sampler=sampler_val,
+        batch_size=config.DATA.BATCH_SIZE,
+        shuffle=False,
+        num_workers=config.DATA.NUM_WORKERS,
+        pin_memory=config.DATA.PIN_MEMORY,
+        drop_last=False
+    )
+    return data_loader_val
 
 def build_loader(config):
     config.defrost()
@@ -104,7 +131,7 @@ def build_loader(config):
     return dataset_train, dataset_val, data_loader_train, data_loader_val, mixup_fn
 
 
-def build_dataset(is_train, config):
+def build_dataset(is_train, config, is_test=False):
     transform = build_transform(is_train, config)
     if config.DATA.DATASET == 'imagenet':
         prefix = 'train' if is_train else 'val'
@@ -125,10 +152,8 @@ def build_dataset(is_train, config):
             ann_file = prefix + "_map_val.txt"
         dataset = IN22KDATASET(config.DATA.DATA_PATH, ann_file, transform)
         nb_classes = 21841
+
     elif config.DATA.DATASET == 'gid':
-<<<<<<< Updated upstream
-        dataset = GIDDATASET(config.DATA.DATA_PATH, transform)
-=======
         gid_transform=build_transform_for_gid_data(is_train, config)
         if is_test:
             ann_file='test.txt'
@@ -137,15 +162,11 @@ def build_dataset(is_train, config):
         else:
             ann_file='val.txt'
         dataset = GIDDATASET(config.DATA.DATA_PATH, ann_file, gid_transform)
->>>>>>> Stashed changes
         nb_classes = 15
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 
     return dataset, nb_classes
-
-import albumentations as A
-
 
 def build_transform_for_gid_data(is_train, config):
     if(is_train):

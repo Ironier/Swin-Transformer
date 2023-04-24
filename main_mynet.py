@@ -259,12 +259,7 @@ def validate(config, data_loader, model):
             output = model(images)
 
         # measure accuracy and record loss
-<<<<<<< Updated upstream
-        loss = criterion(output.view(-1,15), target.view(-1))
-=======
-        print(output.shape, target.shape)
         loss = criterion(output.view(-1,config.MODEL.NUM_CLASSES+1), target.view(-1))
->>>>>>> Stashed changes
         acc1 = accuracy(output, target)
 
         #acc1 = reduce_tensor(acc1)

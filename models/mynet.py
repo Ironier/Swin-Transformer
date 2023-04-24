@@ -652,40 +652,33 @@ class GVIAttentionBlock(nn.Module):
             return x
 
         def flops(self):
-            r'to be done'
-            return 0
+            flops = 0
+            # flops+=self.conv.flops()
+            # flops+=self.softmax.flops()
+            # flops+=self.norm.flops()
+            # if self.dropout is not None:
+            #     flops+=self.dropout.flops()
+            return flops
 
 class UnNamedBlock(nn.Module):
         r'this block gives a attention map of the picture'
 
-        def __init__(self,depth=2,gvi_nums=3,img_size=256,patch_size=4,embed_dim=96,
+        def __init__(self,depth=2,feature_nums=3,img_size=256,gvi_num=4,patch_size=4,embed_dim=96,
                             qkv_bias=True,
                             drop=0, attn_drop=0,
                             norm_layer=nn.LayerNorm):
             super().__init__()
-            self.gvi_nums=gvi_nums
+            self.feature_nums=feature_nums
             self.img_size = img_size
             self.depth=depth
-<<<<<<< Updated upstream
-            self.conv=nn.Conv2d(in_channels=gvi_nums,out_channels=3,kernel_size=3,stride=1,padding=1)
-            self.dropout=None
-            self.eps=1e-5
-            self.alpha1=nn.Linear(3,gvi_nums,bias=qkv_bias)
-            self.alpha2=nn.Linear(3,gvi_nums,bias=qkv_bias)
-            if(drop>0):
-                self.dropout=nn.Dropout(p=drop)
-            else:
-              self.dropout=None
-=======
             self.conv=nn.Conv2d(in_channels=feature_nums,out_channels=3,kernel_size=3,stride=1,padding=1)
             self.eps=1e-6
             self.alpha1=nn.Linear(3,gvi_num,bias=True)
             self.alpha2=nn.Linear(3,gvi_num,bias=True)
 
->>>>>>> Stashed changes
             self.embed_layers=nn.ModuleList()
             for i in range(depth):
-                embed_layer=PatchMerging(input_resolution=(img_size//(2**i),img_size//(2**i)),dim=gvi_nums*(2**i))
+                embed_layer=PatchMerging(input_resolution=(img_size//(2**i),img_size//(2**i)),dim=feature_nums*(2**i))
                 self.embed_layers.append(embed_layer)
                 embed_layer=nn.ReLU()
                 self.embed_layers.append(embed_layer)
@@ -694,15 +687,6 @@ class UnNamedBlock(nn.Module):
 
             self.layers=nn.ModuleList()
             for i in range(depth):
-<<<<<<< Updated upstream
-                layer=GVIAttentionBlock(embed_dim=embed_dim,qkv_bias=qkv_bias,num_head=gvi_nums*(2**(depth-i)),
-                                        drop=attn_drop,
-                                        norm_layer=norm_layer)
-                self.layers.append(layer)
-                layer=nn.ConvTranspose2d(in_channels=gvi_nums*2**(depth-i),out_channels=gvi_nums*2**(depth-i-1),kernel_size=2,padding=0,stride=2)
-                self.layers.append(layer)
-                layer=norm_layer(gvi_nums*2**(depth-i-1))
-=======
                 layer=GVIAttentionBlock(embed_dim=embed_dim,qkv_bias=qkv_bias,num_head=feature_nums*(2**(depth-i)),
                                         img_size=self.img_size//(2**(self.depth-i)),
                                         drop=attn_drop,
@@ -712,81 +696,59 @@ class UnNamedBlock(nn.Module):
                                         kernel_size=2,padding=0,stride=2)
                 self.layers.append(layer)
                 layer=nn.ReLU()
->>>>>>> Stashed changes
                 self.layers.append(layer)
-            self.test_conv=nn.Conv2d(in_channels=3,out_channels=gvi_nums,kernel_size=3,padding=1)
+            self.test_conv=nn.Conv2d(in_channels=gvi_num+3,out_channels=feature_nums,kernel_size=3,padding=1)
 
 
         def forward(self,x,feature):
-<<<<<<< Updated upstream
-            # x1=self.alpha1(x) #B H W C
-            # x2=self.alpha2(x)+self.eps
-            # x=torch.clamp(x1/x2,min=-5,max=5) #B H W gvi_nums
-            x=self.test_conv(x.transpose(1,3)).transpose(1,3).contiguous()
-            if self.dropout!=None:
-                x=self.dropout(x)
-=======
             x1=torch.clamp(self.alpha1(x),min=1e-2,max=1-self.eps) #B H W C
             x2=torch.clamp(self.alpha2(x),min=1e-2,max=1-self.eps)
             gvis=torch.clamp(x1/x2,min=1e-2,max=1-self.eps)
             x=torch.concat([gvis,x],-1)
             x=self.test_conv(x.transpose(1,3)).transpose(1,3).contiguous() #B H W feature_nums
->>>>>>> Stashed changes
             cnt=0
-            x=x.view(-1,self.img_size*self.img_size,self.gvi_nums)
+            x=x.view(-1,self.img_size*self.img_size,self.feature_nums).contiguous()
             for layer in self.embed_layers:
                 x=layer(x) #residential
                 cnt+=1
-<<<<<<< Updated upstream
-            for i in range(cnt):
-                x=x.contiguous().view(-1,self.img_size//(2**(self.depth-i))*self.img_size//(2**(self.depth-i)),self.gvi_nums*(2**(self.depth-i)))
-                x=self.layers[3*i](x,feature) #B H/4*W/4 4*C
-                x=x.transpose(1,2).view(-1,self.gvi_nums*(2**(self.depth-i)),self.img_size//(2**(self.depth-i)),self.img_size//(2**(self.depth-i)))
-=======
             for i in range(self.depth):
                 x=x.contiguous().view(-1,self.img_size//(2**(self.depth-i))*self.img_size//(2**(self.depth-i)),self.feature_nums*(2**(self.depth-i)))
                 x=self.layers[3*i](x,feature)+x #B H/4*W/4 4*C
                 x=x.transpose(1,2).view(-1,self.feature_nums*(2**(self.depth-i)),self.img_size//(2**(self.depth-i)),self.img_size//(2**(self.depth-i)))
->>>>>>> Stashed changes
                 x=self.layers[3*i+1](x).transpose(1,3)
-                x=self.layers[3*i+2](x)+x
+                x=self.layers[3*i+2](x)
             x=self.conv(x.transpose(1,3)).transpose(1,3)
             return x #B H W C
 
         def flops(self):
-            r'to be done'
-            return 0
+            flops=0
+            # flops+=self.alpha1.flops()
+            # flops+=self.alpha2.flops()
+            # flops+=self.test_conv.flops()
+            # for layer in self.embed_layers:
+            #     flops+=layer.flops()
+            # flops+=self.conv.flops()
+            return flops
 
 class Decoder(nn.Module):
-        def __init__(self,img_size=224,patch_size=4,depth=[ 2, 4, 8], gvi_nums=[ 16, 4, 2],
+        def __init__(self,img_size=224,num_classes=15,patch_size=4,depth_nums=[ 2, 4, 8], gvi_nums=[1,2,3],feature_nums=[ 16, 4, 2],
                          embed_dim=96,
                         qkv_bias=True,
                         drop_rate=0.1, attn_drop=0.1,
                         norm_layer=nn.LayerNorm):
             super().__init__()
             self.img_size = img_size
-<<<<<<< Updated upstream
-            #self.patch_size = patch_size
-            self.num_layers=len(depth)
-=======
             self.patch_size = patch_size
             self.num_layers=len(depth_nums)
             self.num_classes=num_classes+1
->>>>>>> Stashed changes
             self.layers=nn.ModuleList()
             for i in range(self.num_layers):
-                layer=UnNamedBlock(depth=depth[i],gvi_nums=gvi_nums[i],img_size=img_size,patch_size=patch_size,embed_dim=embed_dim,
+                layer=UnNamedBlock(depth=depth_nums[i],gvi_num=gvi_nums[i],feature_nums=feature_nums[i],img_size=img_size,patch_size=patch_size,embed_dim=embed_dim,
                                         qkv_bias=qkv_bias,
                                         drop=drop_rate, attn_drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
                 self.layers.append(norm_layer(3))
-<<<<<<< Updated upstream
-            self.conv3d=nn.Conv3d(self.num_layers,1,kernel_size=3,padding=1,stride=1)
-            self.conv2d=nn.Conv2d(3,15,kernel_size=3,padding=1,stride=1)
-            self.softmax=nn.Softmax(-1)
-            self.norm=norm_layer(15)
-=======
             self.conv2d_1=nn.Conv2d(self.num_layers*3+64,3,kernel_size=3,padding=1,stride=1)
             self.avgpool2d=nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
             self.conv2d_classifier=nn.Conv2d(3,self.num_classes,kernel_size=3,padding=1,stride=1)
@@ -794,7 +756,6 @@ class Decoder(nn.Module):
             self.psp_net=PSPNet(n_classes=self.num_classes,psp_size=64)
             self.feature_linear=nn.Linear(in_features=1,out_features=64,bias=True)
             self.relu=nn.ReLU()
->>>>>>> Stashed changes
 
         def forward(self,x,feature):
             #B H W C
@@ -802,16 +763,6 @@ class Decoder(nn.Module):
             res=torch.zeros((x.shape[0],x.shape[1],x.shape[2],channels*self.num_layers)).to(device)
             cnt=0
             for i in range(self.num_layers):
-<<<<<<< Updated upstream
-                x=self.layers[2*i](x,feature)
-                x=self.layers[2*i+1](x)+x
-                res[:,:,:,:,cnt]=x
-                cnt+=1
-            res=self.conv3d(res.transpose(1,4)).squeeze()
-            res=self.conv2d(res.transpose(1,2)).transpose(1,3)
-            res=self.norm(res)
-            return res
-=======
                 temp=self.layers[2*i](x,feature)+x
                 temp=self.layers[2*i+1](temp)
                 res[:,:,:,cnt:self.num_layers*channels:self.num_layers]=temp
@@ -848,42 +799,31 @@ class Decoder(nn.Module):
             output=self.norm(output)
             output=self.conv2d_classifier(output).transpose(1,3)
             return output,output2
->>>>>>> Stashed changes
 
         def flops(self):
-            r'to be done'
-            return 0
+            flops=0
+            # for layer in self.layers:
+            #     flops+=layer.flops()
+            # flops+=self.conv3d.flops()
+            # flops+=self.conv2d.flops()
+            # flops+=self.norm.flops()
+            return flops
 
 
 class MyNet(nn.Module):
     r"""
-    Args:
-        img_size (int | tuple(int)): Input image size. Default 224
-        patch_size (int | tuple(int)): Patch size. Default: 4
-        in_chans (int): Number of input image channels. Default: 3
-        num_classes (int): Number of classes for classification head. Default: 1000
-        embed_dim (int): Patch embedding dimension. Default: 96
-        depths (tuple(int)): Depth of each Swin Transformer layer.
-        num_heads (tuple(int)): Number of attention heads in different layers.
-        window_size (int): Window size. Default: 7
-        mlp_ratio (float): Ratio of mlp hidden dim to embedding dim. Default: 4
-        qkv_bias (bool): If True, add a learnable bias to query, key, value. Default: True
-        drop_rate (float): Dropout rate. Default: 0
-        attn_drop_rate (float): Attention dropout rate. Default: 0
-        drop_path_rate (float): Stochastic depth rate. Default: 0.1
-        norm_layer (nn.Module): Normalization layer. Default: nn.LayerNorm.
-        ape (bool): If True, add absolute position embedding to the patch embedding. Default: False
-        patch_norm (bool): If True, add normalization after patch embedding. Default: True
-        use_checkpoint (bool): Whether to use checkpointing to save memory. Default: False
-        pretrained_window_sizes (tuple(int)): Pretrained window sizes of each layer.
+        Args:
     """
 
-    def __init__(self, img_size=224, patch_size=4, in_chans=3,
+    def __init__(self, img_size=224, patch_size=4, in_chans=3, num_classes=15,
                  embed_dim=96, depths=[2, 2, 6, 2], num_heads=[3, 6, 12, 24],
                  window_size=7, mlp_ratio=4., qkv_bias=True,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,
                  norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
-                 use_checkpoint=False, pretrained_window_sizes=[0, 0, 0, 0], **kwargs):
+                 use_checkpoint=False, pretrained_window_sizes=[0, 0, 0, 0],
+                 decoder_depth=[1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1],
+                 gvi_nums=[8, 4, 2, 2, 2, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3],
+                 decoder_features=[16, 8, 8, 8, 4, 8, 16, 16, 16, 16, 8, 8, 8, 4, 4],**kwargs):
         super().__init__()
         self.swin_backbone=SwinTransformerV2_Backbone(img_size, patch_size, in_chans,
                  embed_dim, depths, num_heads,
@@ -891,18 +831,23 @@ class MyNet(nn.Module):
                  drop_rate, attn_drop_rate, drop_path_rate,
                  norm_layer, ape, patch_norm,
                  use_checkpoint, pretrained_window_sizes)
-        self.decoder=Decoder(img_size=img_size, patch_size=patch_size,depth=[ 1, 2, 3, 4], gvi_nums=[32, 16, 8, 4],embed_dim=embed_dim)
-
+        self.decoder=Decoder(img_size=img_size,num_classes=num_classes, patch_size=patch_size,
+                            depth_nums=decoder_depth,
+                            gvi_nums=gvi_nums,
+                            feature_nums=decoder_features,embed_dim=embed_dim)
+#32 16 8 8 8 4
     def forward(self,x):
         feature=self.swin_backbone(x.transpose(1,3))
         x=self.decoder(x,feature)
         return x
 
+    @torch.no_grad()
+    def forward_test(self,x):
+        feature=self.swin_backbone(x.transpose(1,3))
+        x=self.decoder.forward_test(x,feature)
+        return x
+
     def flops(self):
-<<<<<<< Updated upstream
-        r'to be done'
-        return 0
-=======
         flops=0
         flops+=self.swin_backbone.flops()
         flops+=self.decoder.flops()
@@ -977,4 +922,3 @@ class PSPNet(nn.Module):
         #auxiliary = F.adaptive_max_pool2d(input=class_f, output_size=(1, 1)).view(-1, class_f.size(1))
 
         return p#, self.classifier(auxiliary)
->>>>>>> Stashed changes

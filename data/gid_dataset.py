@@ -14,21 +14,25 @@ warnings.filterwarnings("ignore", "(Possibly )?corrupt EXIF data", UserWarning)
 device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class GIDDATASET(data.Dataset):
-    def __init__(self, root, ann_file='', transform=None, gid_transform=None):
+    def __init__(self, root, ann_file='',gid_transform=None):
         super(GIDDATASET, self).__init__()
 
         self.data_path = os.path.join(root,'data')
         self.target_path = os.path.join(root,'labels')
-        self.transform = transform
         self.gid_transform = gid_transform
         self.norm = A.Normalize()
         self.to_tensor = ToTensor()
 
         self.image_paths = []
-        self.image_paths += glob.glob(os.path.join(self.data_path, '*.tif'))
-
         self.labels = []
-        self.labels += glob.glob(os.path.join(self.target_path, '*.tif'))
+
+        with open(os.path.join(root,ann_file),'r') as f:
+            for file in f.readlines():
+                file=file.strip('\n')
+                if(file==''):
+                    continue
+                self.image_paths.append(os.path.join(self.data_path, '{}.tif'.format(file)))
+                self.labels.append(os.path.join(self.target_path, '{}.tif'.format(file)))
 
         # 保证图片路径的个数与标签个数相等
         assert len(self.image_paths) == len(self.labels)
@@ -61,25 +65,14 @@ class GIDDATASET(data.Dataset):
         """
 
         # images
-<<<<<<< Updated upstream
         images = np.array(self._load_image(self.image_paths[index]).convert('RGB'),dtype=np.float32)
-        if self.transform is not None:
-            images = self.transform(images)
-
         # target
         target = np.array(self._load_target(self.labels[index]).convert('P'),dtype=np.int64)
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-
-=======
-        images = self._load_image(self.image_paths[index]).convert('RGB')
-        # target
-        target = self._load_target(self.labels[index]).convert('P')
         if self.gid_transform is not None:
             transformed = self.gid_transform(image=images, mask=target)
-            images = self.to_tensor(self.norm(transformed['image']))
-            target = self.to_tensor(transformed['mask'])
->>>>>>> Stashed changes
+            images = self.to_tensor(self.norm(image=transformed['image'])['image']).transpose(0,2).transpose(0,1)
+            target = self.to_tensor(transformed['mask']).squeeze()
+
         return images, target
 
     def __len__(self):

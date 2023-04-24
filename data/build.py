@@ -13,6 +13,8 @@ from torchvision import datasets, transforms
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.data import Mixup
 from timm.data import create_transform
+from timm.data.random_erasing import RandomErasing
+from timm.data.transforms import ToNumpy
 
 from .cached_image_folder import CachedImageFolder
 from .imagenet22k_dataset import IN22KDATASET
@@ -124,28 +126,52 @@ def build_dataset(is_train, config):
         dataset = IN22KDATASET(config.DATA.DATA_PATH, ann_file, transform)
         nb_classes = 21841
     elif config.DATA.DATASET == 'gid':
+<<<<<<< Updated upstream
         dataset = GIDDATASET(config.DATA.DATA_PATH, transform)
+=======
+        gid_transform=build_transform_for_gid_data(is_train, config)
+        if is_test:
+            ann_file='test.txt'
+        elif is_train:
+            ann_file='train.txt'
+        else:
+            ann_file='val.txt'
+        dataset = GIDDATASET(config.DATA.DATA_PATH, ann_file, gid_transform)
+>>>>>>> Stashed changes
         nb_classes = 15
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 
     return dataset, nb_classes
 
+import albumentations as A
+
+
+def build_transform_for_gid_data(is_train, config):
+    if(is_train):
+        transform = A.Compose([
+                    A.Resize(height=config.DATA.IMG_SIZE, width=config.DATA.IMG_SIZE),
+                    A.HorizontalFlip(p=config.AUG.REPROB),
+                    A.RandomCrop(height=config.DATA.IMG_SIZE, width=config.DATA.IMG_SIZE),])
+    else:
+        transform = A.Compose([
+                    A.Resize(height=config.DATA.IMG_SIZE, width=config.DATA.IMG_SIZE),])
+    return transform
 
 def build_transform(is_train, config):
-    resize_im = config.DATA.IMG_SIZE > 32
+    resize_im = config.DATA.IMG_SIZE > 256
     if is_train:
         # this should always dispatch to transforms_imagenet_train
         transform = create_transform(
             input_size=config.DATA.IMG_SIZE,
             is_training=True,
-            color_jitter=config.AUG.COLOR_JITTER if config.AUG.COLOR_JITTER > 0 else None,
-            auto_augment=config.AUG.AUTO_AUGMENT if config.AUG.AUTO_AUGMENT != 'none' else None,
+            color_jitter=config.AUG.COLOR_JITTER if config.AUG.COLOR_JITTER > 0  else None,
+            auto_augment=config.AUG.AUTO_AUGMENT if config.AUG.AUTO_AUGMENT!= 'none' else None,
             re_prob=config.AUG.REPROB,
             re_mode=config.AUG.REMODE,
             re_count=config.AUG.RECOUNT,
             interpolation=config.DATA.INTERPOLATION,
-        )
+            )
         if not resize_im:
             # replace RandomResizedCropAndInterpolation with
             # RandomCrop
@@ -155,7 +181,7 @@ def build_transform(is_train, config):
     t = []
     if resize_im:
         if config.TEST.CROP:
-            size = int((256 / 224) * config.DATA.IMG_SIZE)
+            size = 256 #int((256 / 224) * config.DATA.IMG_SIZE)
             t.append(
                 transforms.Resize(size, interpolation=_pil_interp(config.DATA.INTERPOLATION)),
                 # to maintain same ratio w.r.t. 224 images
@@ -166,7 +192,7 @@ def build_transform(is_train, config):
                 transforms.Resize((config.DATA.IMG_SIZE, config.DATA.IMG_SIZE),
                                   interpolation=_pil_interp(config.DATA.INTERPOLATION))
             )
-
+    t.append(ToNumpy())
     t.append(transforms.ToTensor())
     t.append(transforms.Normalize(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD))
     return transforms.Compose(t)

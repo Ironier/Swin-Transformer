@@ -259,7 +259,12 @@ def validate(config, data_loader, model):
             output = model(images)
 
         # measure accuracy and record loss
+<<<<<<< Updated upstream
         loss = criterion(output.view(-1,15), target.view(-1))
+=======
+        print(output.shape, target.shape)
+        loss = criterion(output.view(-1,config.MODEL.NUM_CLASSES+1), target.view(-1))
+>>>>>>> Stashed changes
         acc1 = accuracy(output, target)
 
         #acc1 = reduce_tensor(acc1)
@@ -304,19 +309,20 @@ def throughput(data_loader, model, logger):
 
 
 if __name__ == '__main__':
-#     os.environ['CUDA_VISIBLE_DEVICES']='0,1'
-#     os.environ['WORLD_SIZE']='2'
-#     os.environ['RANK']='0'
-#     os.environ['MASTER_ADDR']='localhost'
-#     os.environ['MASTER_PORT']='54321'
+    # os.environ['CUDA_VISIBLE_DEVICES']='0,1'
+    # os.environ['WORLD_SIZE']='2'
+    # os.environ['MASTER_ADDR']='localhost'
+    # os.environ['MASTER_PORT']='54321'
+    
+    #os.environ['RANK']='0'
 
     args, config = parse_option()
 
     if config.AMP_OPT_LEVEL:
         print("[warning] Apex amp has been deprecated, please use pytorch amp instead!")
 
-    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-        rank = int(os.environ["RANK"])
+    if 'WORLD_SIZE' in os.environ:
+        rank = int(config.LOCAL_RANK)
         world_size = int(os.environ['WORLD_SIZE'])
         print(f"RANK and WORLD_SIZE in environ: {rank}/{world_size}")
         torch.cuda.set_device(config.LOCAL_RANK)

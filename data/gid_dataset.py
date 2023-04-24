@@ -6,18 +6,23 @@ from PIL import Image
 from torchvision.transforms import ToTensor
 import torch
 import warnings
+from albumentations.augmentations.transforms import Normalize
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+import albumentations as A
 
 warnings.filterwarnings("ignore", "(Possibly )?corrupt EXIF data", UserWarning)
 device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class GIDDATASET(data.Dataset):
-    def __init__(self, root, ann_file='', transform=None, target_transform=None):
+    def __init__(self, root, ann_file='', transform=None, gid_transform=None):
         super(GIDDATASET, self).__init__()
 
         self.data_path = os.path.join(root,'data')
         self.target_path = os.path.join(root,'labels')
         self.transform = transform
-        self.target_transform = target_transform
+        self.gid_transform = gid_transform
+        self.norm = A.Normalize()
+        self.to_tensor = ToTensor()
 
         self.image_paths = []
         self.image_paths += glob.glob(os.path.join(self.data_path, '*.tif'))
@@ -34,7 +39,7 @@ class GIDDATASET(data.Dataset):
             im = Image.open(path)
         except:
             print("ERROR IMG LOADED: ", path)
-            random_img = np.random.rand(256, 256, 3) * 255
+            random_img = np.random.rand(256, 256, 3)
             im = Image.fromarray(np.uint8(random_img))
         return im
 
@@ -43,7 +48,7 @@ class GIDDATASET(data.Dataset):
             im = Image.open(path)
         except:
             print("ERROR TARGET LOADED: ", path)
-            random_img = np.random.rand(256, 256) * 255
+            random_img = np.random.rand(256, 256)
             im = Image.fromarray(np.uint8(random_img))
         return im
 
@@ -56,6 +61,7 @@ class GIDDATASET(data.Dataset):
         """
 
         # images
+<<<<<<< Updated upstream
         images = np.array(self._load_image(self.image_paths[index]).convert('RGB'),dtype=np.float32)
         if self.transform is not None:
             images = self.transform(images)
@@ -65,6 +71,15 @@ class GIDDATASET(data.Dataset):
         if self.target_transform is not None:
             target = self.target_transform(target)
 
+=======
+        images = self._load_image(self.image_paths[index]).convert('RGB')
+        # target
+        target = self._load_target(self.labels[index]).convert('P')
+        if self.gid_transform is not None:
+            transformed = self.gid_transform(image=images, mask=target)
+            images = self.to_tensor(self.norm(transformed['image']))
+            target = self.to_tensor(transformed['mask'])
+>>>>>>> Stashed changes
         return images, target
 
     def __len__(self):

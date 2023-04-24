@@ -629,27 +629,26 @@ class SwinTransformerV2_Backbone(nn.Module):
         return flops
 
 class GVIAttentionBlock(nn.Module):
-        def __init__(self,embed_dim=96,qkv_bias=True,img_size=256,num_head=6,
+        def __init__(self,embed_dim=96,channel_scale=8,qkv_bias=True,img_size=256,num_head=6,
                             drop=0,
                             norm_layer=nn.LayerNorm):
             super().__init__()
             self.num_heads=num_head
-            self.conv=nn.Conv1d(embed_dim*8,self.num_heads,kernel_size=3,padding=1,bias=qkv_bias)
-            self.softmax=nn.Softmax(dim=-1)
+            self.linear=nn.Linear(in_features=1,out_features=self.num_heads,bias=True)
+            self.conv2=nn.Conv1d(embed_dim*channel_scale,self.num_heads,kernel_size=3,padding=1,bias=qkv_bias)
+            self.softmax=nn.Softmax(dim=-2)
             self.img_size=img_size
-            self.norm=norm_layer(num_head)
             if(drop>0):
                 self.dropout=nn.Dropout(p=drop)
             else:
               self.dropout=None
 
         def forward(self,x,feature):
-            temp=self.conv(feature) #B num_heads 1
-            #temp=torch.clamp(temp,min=-5,max=5)
+            feature=self.linear(feature)
+            temp=self.conv2(feature) #B num_heads num_heads
             temp=torch.bmm(x,temp)/self.num_heads #//q*k
-            temp=self.softmax(temp) #B num_heads 1
-            x=x*temp #B H*W C
-            x=self.norm(x)
+            temp=self.softmax(temp) #B H*W num_heads
+            x=x*temp #B H*W num_heads
             return x
 
         def flops(self):
@@ -667,6 +666,7 @@ class UnNamedBlock(nn.Module):
             self.gvi_nums=gvi_nums
             self.img_size = img_size
             self.depth=depth
+<<<<<<< Updated upstream
             self.conv=nn.Conv2d(in_channels=gvi_nums,out_channels=3,kernel_size=3,stride=1,padding=1)
             self.dropout=None
             self.eps=1e-5
@@ -676,12 +676,25 @@ class UnNamedBlock(nn.Module):
                 self.dropout=nn.Dropout(p=drop)
             else:
               self.dropout=None
+=======
+            self.conv=nn.Conv2d(in_channels=feature_nums,out_channels=3,kernel_size=3,stride=1,padding=1)
+            self.eps=1e-6
+            self.alpha1=nn.Linear(3,gvi_num,bias=True)
+            self.alpha2=nn.Linear(3,gvi_num,bias=True)
+
+>>>>>>> Stashed changes
             self.embed_layers=nn.ModuleList()
             for i in range(depth):
                 embed_layer=PatchMerging(input_resolution=(img_size//(2**i),img_size//(2**i)),dim=gvi_nums*(2**i))
                 self.embed_layers.append(embed_layer)
+                embed_layer=nn.ReLU()
+                self.embed_layers.append(embed_layer)
+                embed_layer=nn.AvgPool2d(kernel_size=3,stride=1,padding=1)
+                self.embed_layers.append(embed_layer)
+
             self.layers=nn.ModuleList()
             for i in range(depth):
+<<<<<<< Updated upstream
                 layer=GVIAttentionBlock(embed_dim=embed_dim,qkv_bias=qkv_bias,num_head=gvi_nums*(2**(depth-i)),
                                         drop=attn_drop,
                                         norm_layer=norm_layer)
@@ -689,26 +702,52 @@ class UnNamedBlock(nn.Module):
                 layer=nn.ConvTranspose2d(in_channels=gvi_nums*2**(depth-i),out_channels=gvi_nums*2**(depth-i-1),kernel_size=2,padding=0,stride=2)
                 self.layers.append(layer)
                 layer=norm_layer(gvi_nums*2**(depth-i-1))
+=======
+                layer=GVIAttentionBlock(embed_dim=embed_dim,qkv_bias=qkv_bias,num_head=feature_nums*(2**(depth-i)),
+                                        img_size=self.img_size//(2**(self.depth-i)),
+                                        drop=attn_drop,
+                                        norm_layer=norm_layer)
+                self.layers.append(layer)
+                layer=nn.ConvTranspose2d(in_channels=feature_nums*2**(depth-i),out_channels=feature_nums*2**(depth-i-1),
+                                        kernel_size=2,padding=0,stride=2)
+                self.layers.append(layer)
+                layer=nn.ReLU()
+>>>>>>> Stashed changes
                 self.layers.append(layer)
             self.test_conv=nn.Conv2d(in_channels=3,out_channels=gvi_nums,kernel_size=3,padding=1)
 
 
         def forward(self,x,feature):
+<<<<<<< Updated upstream
             # x1=self.alpha1(x) #B H W C
             # x2=self.alpha2(x)+self.eps
             # x=torch.clamp(x1/x2,min=-5,max=5) #B H W gvi_nums
             x=self.test_conv(x.transpose(1,3)).transpose(1,3).contiguous()
             if self.dropout!=None:
                 x=self.dropout(x)
+=======
+            x1=torch.clamp(self.alpha1(x),min=1e-2,max=1-self.eps) #B H W C
+            x2=torch.clamp(self.alpha2(x),min=1e-2,max=1-self.eps)
+            gvis=torch.clamp(x1/x2,min=1e-2,max=1-self.eps)
+            x=torch.concat([gvis,x],-1)
+            x=self.test_conv(x.transpose(1,3)).transpose(1,3).contiguous() #B H W feature_nums
+>>>>>>> Stashed changes
             cnt=0
             x=x.view(-1,self.img_size*self.img_size,self.gvi_nums)
             for layer in self.embed_layers:
                 x=layer(x) #residential
                 cnt+=1
+<<<<<<< Updated upstream
             for i in range(cnt):
                 x=x.contiguous().view(-1,self.img_size//(2**(self.depth-i))*self.img_size//(2**(self.depth-i)),self.gvi_nums*(2**(self.depth-i)))
                 x=self.layers[3*i](x,feature) #B H/4*W/4 4*C
                 x=x.transpose(1,2).view(-1,self.gvi_nums*(2**(self.depth-i)),self.img_size//(2**(self.depth-i)),self.img_size//(2**(self.depth-i)))
+=======
+            for i in range(self.depth):
+                x=x.contiguous().view(-1,self.img_size//(2**(self.depth-i))*self.img_size//(2**(self.depth-i)),self.feature_nums*(2**(self.depth-i)))
+                x=self.layers[3*i](x,feature)+x #B H/4*W/4 4*C
+                x=x.transpose(1,2).view(-1,self.feature_nums*(2**(self.depth-i)),self.img_size//(2**(self.depth-i)),self.img_size//(2**(self.depth-i)))
+>>>>>>> Stashed changes
                 x=self.layers[3*i+1](x).transpose(1,3)
                 x=self.layers[3*i+2](x)+x
             x=self.conv(x.transpose(1,3)).transpose(1,3)
@@ -726,8 +765,14 @@ class Decoder(nn.Module):
                         norm_layer=nn.LayerNorm):
             super().__init__()
             self.img_size = img_size
+<<<<<<< Updated upstream
             #self.patch_size = patch_size
             self.num_layers=len(depth)
+=======
+            self.patch_size = patch_size
+            self.num_layers=len(depth_nums)
+            self.num_classes=num_classes+1
+>>>>>>> Stashed changes
             self.layers=nn.ModuleList()
             for i in range(self.num_layers):
                 layer=UnNamedBlock(depth=depth[i],gvi_nums=gvi_nums[i],img_size=img_size,patch_size=patch_size,embed_dim=embed_dim,
@@ -736,16 +781,28 @@ class Decoder(nn.Module):
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
                 self.layers.append(norm_layer(3))
+<<<<<<< Updated upstream
             self.conv3d=nn.Conv3d(self.num_layers,1,kernel_size=3,padding=1,stride=1)
             self.conv2d=nn.Conv2d(3,15,kernel_size=3,padding=1,stride=1)
             self.softmax=nn.Softmax(-1)
             self.norm=norm_layer(15)
+=======
+            self.conv2d_1=nn.Conv2d(self.num_layers*3+64,3,kernel_size=3,padding=1,stride=1)
+            self.avgpool2d=nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
+            self.conv2d_classifier=nn.Conv2d(3,self.num_classes,kernel_size=3,padding=1,stride=1)
+            self.norm=norm_layer(self.num_classes)
+            self.psp_net=PSPNet(n_classes=self.num_classes,psp_size=64)
+            self.feature_linear=nn.Linear(in_features=1,out_features=64,bias=True)
+            self.relu=nn.ReLU()
+>>>>>>> Stashed changes
 
         def forward(self,x,feature):
             #B H W C
-            res=torch.rand((x.shape[0],x.shape[1],x.shape[2],x.shape[3],self.num_layers)).to(device)
+            channels=x.shape[3]
+            res=torch.zeros((x.shape[0],x.shape[1],x.shape[2],channels*self.num_layers)).to(device)
             cnt=0
             for i in range(self.num_layers):
+<<<<<<< Updated upstream
                 x=self.layers[2*i](x,feature)
                 x=self.layers[2*i+1](x)+x
                 res[:,:,:,:,cnt]=x
@@ -754,6 +811,44 @@ class Decoder(nn.Module):
             res=self.conv2d(res.transpose(1,2)).transpose(1,3)
             res=self.norm(res)
             return res
+=======
+                temp=self.layers[2*i](x,feature)+x
+                temp=self.layers[2*i+1](temp)
+                res[:,:,:,cnt:self.num_layers*channels:self.num_layers]=temp
+                cnt+=1
+            psp=self.psp_net(self.feature_linear(feature.view(-1,32,32,1)))
+            res=torch.concat([res.transpose(1,3),psp.transpose(1,3)],dim=1)
+            output=self.conv2d_1(res)
+            output=self.relu(output)
+            output=self.norm(output)
+            output=self.conv2d_classifier(output).transpose(1,3)
+            return output
+
+        @torch.no_grad()
+        def forward_test(self,x,feature):
+            #B H W C
+            channels=x.shape[3]
+            res=torch.zeros((x.shape[0],x.shape[1],x.shape[2],channels*self.num_layers)).to(device)
+            cnt=0
+            for i in range(self.num_layers):
+                temp=self.layers[2*i](x,feature)+x
+                temp=self.layers[2*i+1](temp)
+                res[:,:,:,cnt:self.num_layers*channels:self.num_layers]=temp
+                cnt+=1
+            output2=torch.zeros((x.shape[0],x.shape[1],x.shape[2],self.num_classes,self.num_layers)).to(device)
+            cnt=0
+            for i in range(self.num_layers):
+                temp=res[:,:,:,cnt:self.num_layers*channels:self.num_layers]
+                output2[:,:,:,:,cnt]=self.norm(self.conv2d_classifier(temp.transpose(1,3)).transpose(1,3))
+                cnt+=1
+            psp=self.psp_net(self.feature_linear(feature.view(-1,32,32,1)))
+            res=torch.concat([res.transpose(1,3),psp.transpose(1,3)],dim=1)
+            output=self.conv2d_1(res)
+            output=self.relu(output)
+            output=self.norm(output)
+            output=self.conv2d_classifier(output).transpose(1,3)
+            return output,output2
+>>>>>>> Stashed changes
 
         def flops(self):
             r'to be done'
@@ -804,5 +899,82 @@ class MyNet(nn.Module):
         return x
 
     def flops(self):
+<<<<<<< Updated upstream
         r'to be done'
         return 0
+=======
+        flops=0
+        flops+=self.swin_backbone.flops()
+        flops+=self.decoder.flops()
+        return flops
+
+class PSPModule(nn.Module):
+    def __init__(self, features, out_features=1024, sizes=(1, 2, 3, 6)):
+        super().__init__()
+        self.stages = []
+        self.stages = nn.ModuleList([self._make_stage(features, size) for size in sizes])
+        self.bottleneck = nn.Conv2d(features * (len(sizes) + 1), out_features, kernel_size=1)
+        self.relu = nn.ReLU()
+
+    def _make_stage(self, features, size):
+        prior = nn.AdaptiveAvgPool2d(output_size=(size, size))
+        conv = nn.Conv2d(features, features, kernel_size=1, bias=False)
+        return nn.Sequential(prior, conv)
+
+    def forward(self, feats):
+        h, w = feats.size(2), feats.size(3)
+        priors = [F.upsample(input=stage(feats), size=(h, w), mode='bilinear') for stage in self.stages] + [feats]
+        bottle = self.bottleneck(torch.cat(priors, 1))
+        return self.relu(bottle)
+
+
+class PSPUpsample(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.PReLU()
+        )
+
+    def forward(self, x):
+        h, w = 2 * x.size(2), 2 * x.size(3)
+        p = F.upsample(input=x, size=(h, w), mode='bilinear')
+        return self.conv(p)
+
+class PSPNet(nn.Module):
+    def __init__(self, n_classes=18, sizes=(1, 2, 3, 6), psp_size=2048):#, deep_features_size=1024, backend='resnet34', pretrained=True):
+        super().__init__()
+        self.psp = PSPModule(psp_size, 1024, sizes)
+        self.drop_1 = nn.Dropout2d(p=0.3)
+
+        self.up_1 = PSPUpsample(1024, 256)
+        self.up_2 = PSPUpsample(256, 64)
+        self.up_3 = PSPUpsample(64, 64)
+
+        self.drop_2 = nn.Dropout2d(p=0.15)
+
+        # self.classifier = nn.Sequential(
+        #     nn.Linear(deep_features_size, 256),
+        #     nn.ReLU(),
+        #     nn.Linear(256, n_classes)
+        # )
+
+    def forward(self, x):
+        f = x
+        p = self.psp(f)
+        p = self.drop_1(p)
+
+        p = self.up_1(p)
+        p = self.drop_2(p)
+
+        p = self.up_2(p)
+        p = self.drop_2(p)
+
+        p = self.up_3(p)
+        p = self.drop_2(p)
+
+        #auxiliary = F.adaptive_max_pool2d(input=class_f, output_size=(1, 1)).view(-1, class_f.size(1))
+
+        return p#, self.classifier(auxiliary)
+>>>>>>> Stashed changes

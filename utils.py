@@ -22,7 +22,10 @@ def load_checkpoint(config, model, optimizer, lr_scheduler, loss_scaler, logger)
     logger.info(msg)
     max_accuracy = 0.0
     if not config.EVAL_MODE and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
-        optimizer.load_state_dict(checkpoint['optimizer'])
+        try:
+            optimizer.load_state_dict(checkpoint['optimizer'])
+        except:
+            logger.info(f"optimizer load failed. You may use the different optimizer from the previous one.")
         lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
         config.defrost()
         config.TRAIN.START_EPOCH = checkpoint['epoch'] + 1
@@ -128,7 +131,7 @@ def load_pretrained(config, model, logger):
     torch.cuda.empty_cache()
 
 
-def save_checkpoint(config, epoch, model, max_accuracy, optimizer, lr_scheduler, loss_scaler, logger):
+def save_checkpoint(config, epoch, model, max_accuracy, optimizer, lr_scheduler, loss_scaler, logger, best=False):
     save_state = {'model': model.state_dict(),
                   'optimizer': optimizer.state_dict(),
                   'lr_scheduler': lr_scheduler.state_dict(),
@@ -136,11 +139,16 @@ def save_checkpoint(config, epoch, model, max_accuracy, optimizer, lr_scheduler,
                   'scaler': loss_scaler.state_dict(),
                   'epoch': epoch,
                   'config': config}
-
-    save_path = os.path.join(config.OUTPUT, f'ckpt_epoch_{epoch}.pth')
-    logger.info(f"{save_path} saving......")
-    torch.save(save_state, save_path)
-    logger.info(f"{save_path} saved !!!")
+    if(not best):
+        save_path = os.path.join(config.OUTPUT, f'ckpt_epoch_{epoch}.pth')
+        logger.info(f"{save_path} saving......")
+        torch.save(save_state, save_path)
+        logger.info(f"{save_path} saved !!!")
+    else:
+        save_path = os.path.join(config.OUTPUT, f'best_param.pth')
+        logger.info(f"current best {save_path} saving......")
+        torch.save(save_state, save_path)
+        logger.info(f"current best {save_path} saved !!!")
 
 
 def get_grad_norm(parameters, norm_type=2):

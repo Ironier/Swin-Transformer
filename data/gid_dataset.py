@@ -70,7 +70,7 @@ class GIDDATASET(data.Dataset):
         target = np.array(self._load_target(self.labels[index]).convert('P'),dtype=np.int64)
         if self.gid_transform is not None:
             transformed = self.gid_transform(image=images, mask=target)
-            images = self.to_tensor(self.norm(image=transformed['image'])['image']).transpose(0,2).transpose(0,1)
+            images = self.to_tensor(self.norm(image=transformed['image'])['image']) #B C H W
             target = self.to_tensor(transformed['mask']).squeeze()
 
         return images, target

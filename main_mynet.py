@@ -168,7 +168,9 @@ def main(config):
 
         acc1, loss = validate(config, data_loader_val, model)
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
-        max_accuracy = max(max_accuracy, acc1)
+        if(acc1>max_accuracy):
+            max_accuracy = acc1
+            save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, loss_scaler, logger, best=True)
         logger.info(f'Max accuracy: {max_accuracy:.2f}%')
 
     total_time = time.time() - start_time
@@ -198,7 +200,7 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
         with torch.cuda.amp.autocast(enabled=config.AMP_ENABLE):
             outputs = model(samples)
 
-        loss = criterion(outputs.view(-1,15), targets.view(-1))
+        loss = criterion(outputs, targets)
         loss = loss / config.TRAIN.ACCUMULATION_STEPS
 
 
@@ -238,7 +240,7 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
 
 def accuracy(output,target):
-    return 100*torch.sum(output.argmax(dim=3)==target,dim=[0,1,2])/(output.shape[0]*output.shape[1]*output.shape[2])
+    return 100*torch.sum(output.argmax(dim=1)==target,dim=[0,1,2])/(output.shape[0]*output.shape[2]*output.shape[3])
 
 @torch.no_grad()
 def validate(config, data_loader, model):
@@ -259,7 +261,7 @@ def validate(config, data_loader, model):
             output = model(images)
 
         # measure accuracy and record loss
-        loss = criterion(output.view(-1,config.MODEL.NUM_CLASSES+1), target.view(-1))
+        loss = criterion(output, target)
         acc1 = accuracy(output, target)
 
         #acc1 = reduce_tensor(acc1)
@@ -334,9 +336,9 @@ if __name__ == '__main__':
     cudnn.benchmark = True
 
     # linear scale the learning rate according to total batch size, may not be optimal
-    linear_scaled_lr = config.TRAIN.BASE_LR * config.DATA.BATCH_SIZE * world_size/ 512.0
-    linear_scaled_warmup_lr = config.TRAIN.WARMUP_LR * config.DATA.BATCH_SIZE * world_size / 512.0
-    linear_scaled_min_lr = config.TRAIN.MIN_LR * config.DATA.BATCH_SIZE * world_size / 512.0
+    linear_scaled_lr = config.TRAIN.BASE_LR * world_size / 128
+    linear_scaled_warmup_lr = config.TRAIN.WARMUP_LR * world_size / 128
+    linear_scaled_min_lr = config.TRAIN.MIN_LR * world_size / 128
     # gradient accumulation also need to scale the learning rate
     if config.TRAIN.ACCUMULATION_STEPS > 1:
         linear_scaled_lr = linear_scaled_lr * config.TRAIN.ACCUMULATION_STEPS

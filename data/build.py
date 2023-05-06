@@ -173,8 +173,7 @@ def build_transform_for_gid_data(is_train, config):
         transform = A.Compose([
                     A.Resize(height=config.DATA.IMG_SIZE, width=config.DATA.IMG_SIZE),
                     A.HorizontalFlip(p=config.AUG.REPROB),
-                    A.RandomCrop(height=config.DATA.IMG_SIZE, width=config.DATA.IMG_SIZE),
-                    ])
+                    A.RandomCrop(height=config.DATA.IMG_SIZE, width=config.DATA.IMG_SIZE),])
     else:
         transform = A.Compose([
                     A.Resize(height=config.DATA.IMG_SIZE, width=config.DATA.IMG_SIZE),])

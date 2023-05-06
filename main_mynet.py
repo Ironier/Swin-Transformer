@@ -32,9 +32,9 @@ from utils import load_checkpoint, load_pretrained, save_checkpoint, NativeScale
 
 def parse_option():
     parser = argparse.ArgumentParser('Swin Transformer training and evaluation script', add_help=False)
-    parser.add_argument('--cfg', type=str, metavar="FILE", help='path to config file', 
+    parser.add_argument('--cfg', type=str, metavar="FILE", help='path to config file',
                 default='./configs/mynet/mynet_v1.yaml')
-    parser.add_argument('--data-path', type=str, metavar="PATH", help='path to dataset', 
+    parser.add_argument('--data-path', type=str, metavar="PATH", help='path to dataset',
                 default='D:\\MyProjects\\GID_processed\\GID')
     parser.add_argument(
         "--opts",
@@ -110,7 +110,7 @@ def main(config):
 
     optimizer = build_optimizer(config, model)
     loss_scaler = NativeScalerWithGradNormCount()
-    
+
 
     if config.TRAIN.ACCUMULATION_STEPS > 1:
         lr_scheduler = build_scheduler(config, optimizer, len(data_loader_train) // config.TRAIN.ACCUMULATION_STEPS)
@@ -310,7 +310,7 @@ if __name__ == '__main__':
     # os.environ['WORLD_SIZE']='2'
     # os.environ['MASTER_ADDR']='localhost'
     # os.environ['MASTER_PORT']='54321'
-    
+
     #os.environ['RANK']='0'
 
     args, config = parse_option()
@@ -336,9 +336,9 @@ if __name__ == '__main__':
     cudnn.benchmark = True
 
     # linear scale the learning rate according to total batch size, may not be optimal
-    linear_scaled_lr = config.TRAIN.BASE_LR * world_size / 128
-    linear_scaled_warmup_lr = config.TRAIN.WARMUP_LR * world_size / 128
-    linear_scaled_min_lr = config.TRAIN.MIN_LR * world_size / 128
+    linear_scaled_lr = config.TRAIN.BASE_LR * world_size
+    linear_scaled_warmup_lr = config.TRAIN.WARMUP_LR * world_size
+    linear_scaled_min_lr = config.TRAIN.MIN_LR * world_size
     # gradient accumulation also need to scale the learning rate
     if config.TRAIN.ACCUMULATION_STEPS > 1:
         linear_scaled_lr = linear_scaled_lr * config.TRAIN.ACCUMULATION_STEPS

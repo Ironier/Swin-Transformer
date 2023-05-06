@@ -686,26 +686,28 @@ class UnNamedBlock(nn.Module):
             #     self.embed_layers.append(embed_layer)
             #     embed_layer=PatchMerging(input_resolution=(self.img_size//(2**i),self.img_size//(2**i)),dim=feature_nums*(2**i))
             #     self.embed_layers.append(embed_layer)
-
+            self.length_list=[32]
             self.layers=nn.ModuleList()
             for i in range(depth):
                 layer=GVIAttentionBlock(num_head=self.feature_nums,
                                         drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
+                self.length_list.append(self.img_size*(2**(i+1)))
                 layer=nn.Upsample(size=(self.img_size*(2**(i+1)),self.img_size*(2**(i+1))),mode='bilinear')
                 #nn.ConvTranspose2d(in_channels=feature_nums*2**(depth-i),out_channels=feature_nums*2**(depth-i-1),kernel_size=2,padding=0,stride=2)
                 self.layers.append(layer)
 
-            self.absolute_pos_embed = nn.Parameter(torch.zeros(1,self.feature_nums,self.img_size,self.img_size))
+            self.absolute_pos_embed = nn.Parameter(torch.zeros(1,self.feature_nums,32,32))
             trunc_normal_(self.absolute_pos_embed, std=.02)
 
             self.conv=nn.Conv2d(in_channels=feature_nums,out_channels=3,kernel_size=3,stride=1,padding=1)
 
 
         def forward(self,x,feature):
-            x1=self.alpha1(x) #B W H C
-            x2=torch.clamp(self.alpha2(x),min=self.eps)
+            x0=x.transpose(1,3)
+            x1=self.alpha1(x0) #B W H C
+            x2=torch.clamp(self.alpha2(x0),min=self.eps)
             gvis=x1*torch.log(1+1/x2)
             gvis=gvis.transpose(1,3) #B C H W
 
@@ -714,9 +716,9 @@ class UnNamedBlock(nn.Module):
             x=x+self.absolute_pos_embed
 
             for i in range(self.depth):
-                x=x.transpose(1,3).view(-1,(self.img_size*(2**i))**2, self.feature_nums)
-                x=self.layers[2*i](x,feature) #gvi attention
-                x=x.view(-1,self.img_size*(2**i),self.img_size*(2**i),self.feature_nums).transpose(1,3)
+                x=x.transpose(1,3).contiguous().view(-1,self.length_list[i]**2, self.feature_nums)
+                x=self.layers[2*i](x,feature)+x #gvi attention
+                x=x.view(-1,self.length_list[i],self.length_list[i],self.feature_nums).transpose(1,3)
                 x=self.layers[2*i+1](x)#upsample
 
             x=self.conv(x)
@@ -763,10 +765,10 @@ class Decoder(nn.Module):
             #B H W C
             x=feature.view(-1,64,32,32)
             channels=3
-            res=torch.zeros((x.shape[0],channels,x.shape[2],x.shape[3],self.num_layers)).to(device)
+            res=torch.zeros((x.shape[0],channels,self.img_size,self.img_size,self.num_layers)).to(device)
             cnt=0
             for i in range(self.num_layers):
-                temp=self.layers[i](x,feature)+x #Block
+                temp=self.layers[i](x,feature) #Block
                 res[:,:,:,:,cnt]=temp #B 3 H W
                 cnt+=1
 
@@ -776,7 +778,7 @@ class Decoder(nn.Module):
             output=self.relu(output)
             output=self.mlp_classifier(output).transpose(1,3) #B C H W
             output=self.conv2d_2(output)
-            #output=self.softmax(output)
+            output=self.softmax(output)
             return output
 
         @torch.no_grad()

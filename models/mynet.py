@@ -594,14 +594,6 @@ class SwinTransformerV2_Backbone(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
-    @torch.jit.ignore
-    def no_weight_decay(self):
-        return {'absolute_pos_embed'}
-
-    @torch.jit.ignore
-    def no_weight_decay_keywords(self):
-        return {"cpb_mlp", "logit_scale", 'relative_position_bias_table'}
-
     def forward_features(self, x):
         x = self.patch_embed(x)
         if self.ape:
@@ -754,10 +746,10 @@ class Decoder(nn.Module):
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
             self.conv2d_1=nn.Conv2d(3,256,kernel_size=1,stride=1)
-            self.conv2d_2=nn.Conv2d(64,self.num_classes,kernel_size=1,stride=1,bias=False)
+            self.conv2d_2=nn.Conv2d(256,self.num_classes,kernel_size=1,stride=1,bias=False)
             self.conv3d_1=nn.Conv3d(self.num_layers,1,kernel_size=1,stride=1)
             #self.drop=nn.Dropout(drop_rate)
-            self.mlp_classifier=Mlp(in_features=256,hidden_features=128,out_features=64,drop=drop_rate)
+            #self.mlp_classifier=Mlp(in_features=256,hidden_features=128,out_features=64,drop=drop_rate)
             self.relu=nn.ReLU()
             self.softmax=nn.LogSoftmax(1)
 
@@ -774,41 +766,35 @@ class Decoder(nn.Module):
 
             res=res.transpose(1,4) #B CNT H W C
             res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
-            output=self.conv2d_1(res).transpose(1,3) #B W H C
+            output=self.conv2d_1(res) #B W H C
             output=self.relu(output)
-            output=self.mlp_classifier(output).transpose(1,3) #B C H W
+            #output=self.mlp_classifier(output).transpose(1,3) #B C H W
             output=self.conv2d_2(output)
             output=self.softmax(output)
             return output
 
         @torch.no_grad()
-        def forward_test(self,x,feature):
-            res=torch.zeros((x.shape[0],x.shape[1],x.shape[2],x.shape[3],self.num_layers)).to(device)
-            output2=torch.zeros((x.shape[0],self.num_classes,x.shape[2],x.shape[3],self.num_layers)).to(device)
+        def forward_test(self,feature):
+            x=feature.view(-1,64,32,32)
+            channels=3
+            res=torch.zeros((x.shape[0],channels,self.img_size,self.img_size,self.num_layers)).to(device)
+            output2=torch.zeros((x.shape[0],self.num_classes,self.img_size,self.img_size,self.num_layers)).to(device)
             cnt=0
             for i in range(self.num_layers):
                 temp=self.layers[i](x,feature)
                 res[:,:,:,:,cnt]=temp
-                temp=self.conv2d_1(temp).transpose(1,3)
+                temp=self.conv2d_1(temp)
                 temp=self.relu(temp)
-                temp=self.mlp_classifier(temp).transpose(1,3)
+                #temp=self.mlp_classifier(temp).transpose(1,3)
                 temp=self.conv2d_2(temp)
                 temp=self.softmax(temp)
                 output2[:,:,:,:,cnt]=temp
                 cnt+=1
-            # psp=self.psp_net(feature.view(-1,64,32,32))
-            # temp=self.conv2d_1(psp).transpose(1,3)
-            # temp=self.relu(temp)
-            # temp=self.mlp_classifier(temp)
-            # temp=self.softmax(temp).transpose(1,3)
-            # output2[:,:,:,:,cnt]=temp
-
-            #res=torch.cat([res.transpose(1,4),psp.permute(0,3,1,2).unsqueeze(1)],dim=1)
             res=res.transpose(1,4) #B CNT H W C
             res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
-            output=self.conv2d_1(res).transpose(1,3)
+            output=self.conv2d_1(res) #B W H C
             output=self.relu(output)
-            output=self.mlp_classifier(output).transpose(1,3)
+            #output=self.mlp_classifier(output).transpose(1,3) #B C H W
             output=self.conv2d_2(output)
             output=self.softmax(output)
             return output,output2
@@ -857,7 +843,7 @@ class MyNet(nn.Module):
     @torch.no_grad()
     def forward_test(self,x):
         feature=self.swin_backbone(x)
-        x=self.decoder.forward_test(x,feature)
+        x=self.decoder.forward_test(feature)
         return x
 
     def flops(self):
@@ -865,6 +851,14 @@ class MyNet(nn.Module):
         flops+=self.swin_backbone.flops()
         flops+=self.decoder.flops()
         return flops
+
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return {'swin_backbone.absolute_pos_embed'}
+
+    @torch.jit.ignore
+    def no_weight_decay_keywords(self):
+        return {"swin_backbone.cpb_mlp", "swin_backbone.logit_scale", 'swin_backbone.relative_position_bias_table'}
 
 # class ResBlock(nn.Module):
 #         def __init__(self,channels,drop=0.1):

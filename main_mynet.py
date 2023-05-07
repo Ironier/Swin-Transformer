@@ -141,6 +141,8 @@ def main(config):
 
     if config.MODEL.RESUME:
         max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, loss_scaler, logger)
+        if config.MODEL.PRETRAINED:
+             load_pretrained(config, model_without_ddp, logger)
         acc1, loss = validate(config, data_loader_val, model)
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
         if config.EVAL_MODE:

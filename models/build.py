@@ -132,7 +132,10 @@ def build_model(config, is_pretrain=False):
                                   ape=config.MODEL.SWINV2.APE,
                                   patch_norm=config.MODEL.SWINV2.PATCH_NORM,
                                   use_checkpoint=config.TRAIN.USE_CHECKPOINT,
-                                  pretrained_window_sizes=config.MODEL.SWINV2.PRETRAINED_WINDOW_SIZES)
+                                  pretrained_window_sizes=config.MODEL.SWINV2.PRETRAINED_WINDOW_SIZES,
+                                  decoder_depth=config.MODEL.DECODER.DEPTH,
+                                  gvi_nums=config.MODEL.DECODER.GVI_NUMS,
+                                  decoder_features=config.MODEL.DECODER.FEATURES)
     else:
         raise NotImplementedError(f"Unkown model: {model_type}")
 

@@ -8,7 +8,7 @@
 import os
 import torch
 import torch.distributed as dist
-from torch._six import inf
+from math import inf
 
 
 def load_checkpoint(config, model, optimizer, lr_scheduler, loss_scaler, logger):
@@ -102,25 +102,25 @@ def load_pretrained(config, model, logger):
                 absolute_pos_embed_pretrained_resized = absolute_pos_embed_pretrained_resized.flatten(1, 2)
                 state_dict[k] = absolute_pos_embed_pretrained_resized
 
-    # check classifier, if not match, then re-init classifier to zero
-    head_bias_pretrained = state_dict['head.bias']
-    Nc1 = head_bias_pretrained.shape[0]
-    Nc2 = model.head.bias.shape[0]
-    if (Nc1 != Nc2):
-        if Nc1 == 21841 and Nc2 == 1000:
-            logger.info("loading ImageNet-22K weight to ImageNet-1K ......")
-            map22kto1k_path = f'data/map22kto1k.txt'
-            with open(map22kto1k_path) as f:
-                map22kto1k = f.readlines()
-            map22kto1k = [int(id22k.strip()) for id22k in map22kto1k]
-            state_dict['head.weight'] = state_dict['head.weight'][map22kto1k, :]
-            state_dict['head.bias'] = state_dict['head.bias'][map22kto1k]
-        else:
-            torch.nn.init.constant_(model.head.bias, 0.)
-            torch.nn.init.constant_(model.head.weight, 0.)
-            del state_dict['head.weight']
-            del state_dict['head.bias']
-            logger.warning(f"Error in loading classifier head, re-init classifier head to 0")
+    # # check classifier, if not match, then re-init classifier to zero
+    # head_bias_pretrained = state_dict['head.bias']
+    # Nc1 = head_bias_pretrained.shape[0]
+    # Nc2 = model.head.bias.shape[0]
+    # if (Nc1 != Nc2):
+    #     if Nc1 == 21841 and Nc2 == 1000:
+    #         logger.info("loading ImageNet-22K weight to ImageNet-1K ......")
+    #         map22kto1k_path = f'data/map22kto1k.txt'
+    #         with open(map22kto1k_path) as f:
+    #             map22kto1k = f.readlines()
+    #         map22kto1k = [int(id22k.strip()) for id22k in map22kto1k]
+    #         state_dict['head.weight'] = state_dict['head.weight'][map22kto1k, :]
+    #         state_dict['head.bias'] = state_dict['head.bias'][map22kto1k]
+    #     else:
+    #         torch.nn.init.constant_(model.head.bias, 0.)
+    #         torch.nn.init.constant_(model.head.weight, 0.)
+    #         del state_dict['head.weight']
+    #         del state_dict['head.bias']
+    #         logger.warning(f"Error in loading classifier head, re-init classifier head to 0")
 
     msg = model.load_state_dict(state_dict, strict=False)
     logger.warning(msg)

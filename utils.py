@@ -148,6 +148,9 @@ def save_checkpoint(config, epoch, model, max_accuracy, optimizer, lr_scheduler,
         save_path = os.path.join(config.OUTPUT, f'best_param.pth')
         logger.info(f"current best {save_path} saving......")
         torch.save(save_state, save_path)
+        save_path = os.path.join('/content/drive/MyDrive/SwaNet',f'best_param.pth') #faq colab
+        logger.info(f"current best {save_path} saving......")
+        torch.save(save_state, save_path)
         logger.info(f"current best {save_path} saved !!!")
 
 

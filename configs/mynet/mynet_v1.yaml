@@ -5,7 +5,7 @@ TRAIN:
   BASE_LR: 2e-5
   WARMUP_LR: 5e-8
   MIN_LR: 5e-6
-  WEIGHT_DECAY: 5e-4
+  WEIGHT_DECAY: 1e-3
   EPOCHS: 300
 DATA:
   IMG_SIZE: 256
@@ -20,7 +20,7 @@ MODEL:
     EMBED_DIM: 128
     DEPTHS: [ 2, 2, 18, 2 ]
     NUM_HEADS: [ 4, 8, 16, 32 ]
-    WINDOW_SIZE: 7
+    WINDOW_SIZE: 8
   DECODER:
     DEPTH: [7, 4, 3, 2, 1]
     GVI_NUMS: [8, 8, 8, 12, 16]

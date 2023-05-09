@@ -541,10 +541,6 @@ class SwinTransformerV2_Backbone(nn.Module):
         self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
         self.mlp_ratio = mlp_ratio
 
-        self.gvi_alpha1=nn.Linear(in_chans,gvi_num,bias=True)
-        self.gvi_alpha2=nn.Linear(in_chans,gvi_num,bias=True)
-        self.eps=1e-6
-
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
             img_size=img_size, patch_size=patch_size, in_chans=in_chans+gvi_num, embed_dim=embed_dim,
@@ -599,13 +595,6 @@ class SwinTransformerV2_Backbone(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward_features(self, x):
-        gvi=x.transpose(1,3)
-        x1=self.gvi_alpha1(gvi)
-        x2=torch.clamp(self.gvi_alpha2(gvi),min=self.eps)
-        gvi=x1*torch.log(1+1/x2)
-        gvi=gvi.transpose(1,3)
-        x=torch.cat([x,gvi],dim=1)
-
         x = self.patch_embed(x)
         if self.ape:
             x = x + self.absolute_pos_embed
@@ -677,10 +666,7 @@ class UnNamedBlock(nn.Module):
             self.feature_nums=feature_nums
             self.img_size = img_size // (2**depth)
             self.depth=depth
-            self.eps=1e-6
-            self.alpha1=nn.Linear(64,gvi_num,bias=True)
-            self.alpha2=nn.Linear(64,gvi_num,bias=True)
-            self.heads=64+gvi_num
+            self.heads=64
 
             self.psp_module=PSPModule(features=self.heads,out_features=feature_nums)
             # self.embed_layers=nn.ModuleList()
@@ -708,13 +694,6 @@ class UnNamedBlock(nn.Module):
 
 
         def forward(self,x,feature):
-            x0=x.transpose(1,3)
-            x1=self.alpha1(x0) #B W H C
-            x2=torch.clamp(self.alpha2(x0),min=self.eps)
-            gvis=x1*torch.log(1+1/x2)
-            gvis=gvis.transpose(1,3) #B C H W
-
-            x=torch.cat([gvis,x],dim=1)
             x=self.psp_module(x) #B feature_nums H W
             x=x+self.absolute_pos_embed
 

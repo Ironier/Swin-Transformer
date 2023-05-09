@@ -758,9 +758,9 @@ class Decoder(nn.Module):
                 self.layers.append(layer)
             self.conv2d_1=nn.Conv2d(3,256,kernel_size=1,stride=1)
             self.conv2d_2=nn.Conv2d(256,self.num_classes,kernel_size=1,stride=1,bias=False)
-            self.conv3d_1=nn.Conv3d(self.num_layers,1,kernel_size=1,stride=1)
+            #self.conv3d_1=nn.Conv3d(self.num_layers,1,kernel_size=1,stride=1)
             #self.drop=nn.Dropout(drop_rate)
-            #self.mlp_classifier=Mlp(in_features=256,hidden_features=128,out_features=64,drop=drop_rate)
+            self.mlp_classifier=Mlp(in_features=self.num_layers,hidden_features=128,out_features=1,drop=drop_rate)
             self.relu=nn.ReLU()
             self.softmax=nn.LogSoftmax(1)
 
@@ -775,8 +775,9 @@ class Decoder(nn.Module):
                 res[:,:,:,:,cnt]=temp #B 3 H W
                 cnt+=1
 
-            res=res.transpose(1,4) #B CNT H W C
-            res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
+            #res=res.transpose(1,4) #B CNT H W C
+            #res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
+            res=self.mlp_classifier(res).transpose(1,4).squeeze()
             output=self.conv2d_1(res) #B W H C
             output=self.relu(output)
             #output=self.mlp_classifier(output).transpose(1,3) #B C H W
@@ -801,8 +802,9 @@ class Decoder(nn.Module):
                 temp=self.softmax(temp)
                 output2[:,:,:,:,cnt]=temp
                 cnt+=1
-            res=res.transpose(1,4) #B CNT H W C
-            res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
+            # res=res.transpose(1,4) #B CNT H W C
+            # res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
+            res=self.mlp_classifier(res).transpose(1,4).squeeze()
             output=self.conv2d_1(res) #B W H C
             output=self.relu(output)
             #output=self.mlp_classifier(output).transpose(1,3) #B C H W

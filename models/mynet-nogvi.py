@@ -526,12 +526,12 @@ class SwinTransformerV2_Backbone(nn.Module):
         pretrained_window_sizes (tuple(int)): Pretrained window sizes of each layer.
     """
 
-    def __init__(self, img_size=224, patch_size=4, in_chans=3,gvi_num=8,
+    def __init__(self, img_size=224, patch_size=4, in_chans=3,
                  embed_dim=96, depths=[2, 2, 6, 2], num_heads=[3, 6, 12, 24],
                  window_size=7, mlp_ratio=4., qkv_bias=True,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,
                  norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
-                 use_checkpoint=False, pretrained_window_sizes=[0, 0, 0, 0], **kwargs):
+                 use_checkpoint=False, pretrained_window_sizes=[0, 0, 0, 0],gvi_num=8, **kwargs):
         super().__init__()
 
         self.num_layers = len(depths)
@@ -543,7 +543,7 @@ class SwinTransformerV2_Backbone(nn.Module):
 
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=in_chans+gvi_num, embed_dim=embed_dim,
+            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
             norm_layer=norm_layer if self.patch_norm else None)
         num_patches = self.patch_embed.num_patches
         patches_resolution = self.patch_embed.patches_resolution
@@ -690,7 +690,7 @@ class UnNamedBlock(nn.Module):
             self.absolute_pos_embed = nn.Parameter(torch.zeros(1,self.feature_nums,32,32))
             trunc_normal_(self.absolute_pos_embed, std=.02)
 
-            self.conv=nn.Conv2d(in_channels=feature_nums,out_channels=3,kernel_size=3,stride=1,padding=1)
+            self.conv=nn.Conv2d(in_channels=feature_nums,out_channels=embed_dim,kernel_size=3,stride=1,padding=1)
 
 
         def forward(self,x,feature):
@@ -735,7 +735,7 @@ class Decoder(nn.Module):
                                         drop=drop_rate, attn_drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
-            self.conv2d_1=nn.Conv2d(3,256,kernel_size=1,stride=1)
+            self.conv2d_1=nn.Conv2d(self.embed_dim,256,kernel_size=1,stride=1)
             self.conv2d_2=nn.Conv2d(256,self.num_classes,kernel_size=1,stride=1,bias=False)
             self.conv3d_1=nn.Conv3d(self.num_layers,1,kernel_size=1,stride=1)
             #self.drop=nn.Dropout(drop_rate)
@@ -746,7 +746,7 @@ class Decoder(nn.Module):
         def forward(self,feature):
             #B H W C
             x=feature.view(-1,64,32,32)
-            channels=3
+            channels=self.embed_dim
             res=torch.zeros((x.shape[0],channels,self.img_size,self.img_size,self.num_layers)).to(device)
             cnt=0
             for i in range(self.num_layers):
@@ -766,7 +766,7 @@ class Decoder(nn.Module):
         @torch.no_grad()
         def forward_test(self,feature):
             x=feature.view(-1,64,32,32)
-            channels=3
+            channels=self.embed_dim
             res=torch.zeros((x.shape[0],channels,self.img_size,self.img_size,self.num_layers)).to(device)
             output2=torch.zeros((x.shape[0],self.num_classes,self.img_size,self.img_size,self.num_layers)).to(device)
             cnt=0

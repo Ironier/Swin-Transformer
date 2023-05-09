@@ -526,24 +526,26 @@ class SwinTransformerV2_Backbone(nn.Module):
         pretrained_window_sizes (tuple(int)): Pretrained window sizes of each layer.
     """
 
-    def __init__(self, img_size=224, patch_size=4, in_chans=3,gvi_num=8,
+    def __init__(self, img_size=224, patch_size=4, in_chans=3,
                  embed_dim=96, depths=[2, 2, 6, 2], num_heads=[3, 6, 12, 24],
                  window_size=7, mlp_ratio=4., qkv_bias=True,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,
                  norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
-                 use_checkpoint=False, pretrained_window_sizes=[0, 0, 0, 0], **kwargs):
+                 use_checkpoint=False, pretrained_window_sizes=[0, 0, 0, 0],gvi_num=8, **kwargs):
         super().__init__()
 
         self.num_layers = len(depths)
         self.embed_dim = embed_dim
         self.ape = ape
         self.patch_norm = patch_norm
+        print(self.num_layers,embed_dim)
         self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
         self.mlp_ratio = mlp_ratio
 
         self.gvi_alpha1=nn.Linear(in_chans,gvi_num,bias=True)
         self.gvi_alpha2=nn.Linear(in_chans,gvi_num,bias=True)
         self.eps=1e-6
+        self.gvi_norm = nn.BatchNorm2d(gvi_num)
 
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
@@ -601,9 +603,9 @@ class SwinTransformerV2_Backbone(nn.Module):
     def forward_features(self, x):
         gvi=x.transpose(1,3)
         x1=self.gvi_alpha1(gvi)
-        x2=torch.clamp(self.gvi_alpha2(gvi),min=self.eps)
-        gvi=x1*torch.log(1+1/x2)
-        gvi=gvi.transpose(1,3)
+        x2=torch.clamp(self.gvi_alpha2(gvi),min=0.5+self.eps, max=2-self.eps)
+        gvi=x1*(3-3*x2+x2**2) #~= x1/x2
+        gvi=self.gvi_norm(gvi.transpose(1,3))
         x=torch.cat([x,gvi],dim=1)
 
         x = self.patch_embed(x)
@@ -680,6 +682,7 @@ class UnNamedBlock(nn.Module):
             self.eps=1e-6
             self.alpha1=nn.Linear(64,gvi_num,bias=True)
             self.alpha2=nn.Linear(64,gvi_num,bias=True)
+            self.gvi_norm = nn.BatchNorm2d(gvi_num)
             self.heads=64+gvi_num
 
             self.psp_module=PSPModule(features=self.heads,out_features=feature_nums)
@@ -704,17 +707,17 @@ class UnNamedBlock(nn.Module):
             self.absolute_pos_embed = nn.Parameter(torch.zeros(1,self.feature_nums,32,32))
             trunc_normal_(self.absolute_pos_embed, std=.02)
 
-            self.conv=nn.Conv2d(in_channels=feature_nums,out_channels=3,kernel_size=3,stride=1,padding=1)
+            self.conv=nn.Conv2d(in_channels=feature_nums,out_channels=embed_dim,kernel_size=3,stride=1,padding=1)
 
 
         def forward(self,x,feature):
             x0=x.transpose(1,3)
             x1=self.alpha1(x0) #B W H C
-            x2=torch.clamp(self.alpha2(x0),min=self.eps)
-            gvis=x1*torch.log(1+1/x2)
-            gvis=gvis.transpose(1,3) #B C H W
+            x2=torch.clamp(self.alpha2(x0),min=0.5+self.eps, max=2-self.eps)
+            gvi=x1*(3-3*x2+x2**2) #~= x1/x2
+            gvi=self.gvi_norm(gvi.transpose(1,3)) #B C H W
 
-            x=torch.cat([gvis,x],dim=1)
+            x=torch.cat([gvi,x],dim=1)
             x=self.psp_module(x) #B feature_nums H W
             x=x+self.absolute_pos_embed
 
@@ -756,9 +759,9 @@ class Decoder(nn.Module):
                                         drop=drop_rate, attn_drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
-            self.conv2d_1=nn.Conv2d(3,256,kernel_size=1,stride=1)
+            self.conv2d_1=nn.Conv2d(embed_dim,256,kernel_size=1,stride=1)
             self.conv2d_2=nn.Conv2d(256,self.num_classes,kernel_size=1,stride=1,bias=False)
-            #self.conv3d_1=nn.Conv3d(self.num_layers,1,kernel_size=1,stride=1)
+            self.conv3d_1=nn.Conv3d(self.num_layers,1,kernel_size=1,stride=1)
             #self.drop=nn.Dropout(drop_rate)
             self.mlp_classifier=Mlp(in_features=self.num_layers,hidden_features=128,out_features=1,drop=drop_rate)
             self.relu=nn.ReLU()
@@ -767,7 +770,7 @@ class Decoder(nn.Module):
         def forward(self,feature):
             #B H W C
             x=feature.view(-1,64,32,32)
-            channels=3
+            channels=self.embed_dim
             res=torch.zeros((x.shape[0],channels,self.img_size,self.img_size,self.num_layers)).to(device)
             cnt=0
             for i in range(self.num_layers):
@@ -775,9 +778,8 @@ class Decoder(nn.Module):
                 res[:,:,:,:,cnt]=temp #B 3 H W
                 cnt+=1
 
-            #res=res.transpose(1,4) #B CNT H W C
-            #res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
-            res=self.mlp_classifier(res).transpose(1,4).squeeze()
+            res=res.transpose(1,4) #B CNT H W C
+            res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
             output=self.conv2d_1(res) #B W H C
             output=self.relu(output)
             #output=self.mlp_classifier(output).transpose(1,3) #B C H W
@@ -788,7 +790,7 @@ class Decoder(nn.Module):
         @torch.no_grad()
         def forward_test(self,feature):
             x=feature.view(-1,64,32,32)
-            channels=3
+            channels=self.embed_dim
             res=torch.zeros((x.shape[0],channels,self.img_size,self.img_size,self.num_layers)).to(device)
             output2=torch.zeros((x.shape[0],self.num_classes,self.img_size,self.img_size,self.num_layers)).to(device)
             cnt=0
@@ -802,8 +804,8 @@ class Decoder(nn.Module):
                 temp=self.softmax(temp)
                 output2[:,:,:,:,cnt]=temp
                 cnt+=1
-            # res=res.transpose(1,4) #B CNT H W C
-            # res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
+            res=res.transpose(1,4) #B CNT H W C
+            res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
             res=self.mlp_classifier(res).transpose(1,4).squeeze()
             output=self.conv2d_1(res) #B W H C
             output=self.relu(output)

@@ -604,7 +604,7 @@ class SwinTransformerV2_Backbone(nn.Module):
         gvi=x.transpose(1,3)
         x1=self.gvi_alpha1(gvi)
         x2=torch.clamp(self.gvi_alpha2(gvi),min=0.5+self.eps, max=2-self.eps)
-        gvi=x1*(3-3*x2+x2**2) #~= x1/x2
+        gvi=x1*(4-6*x2+4*x2**2-x2**3) #~= x1/x2
         gvi=self.gvi_norm(gvi.transpose(1,3))
         x=torch.cat([x,gvi],dim=1)
 
@@ -685,7 +685,7 @@ class UnNamedBlock(nn.Module):
             self.gvi_norm = nn.BatchNorm2d(gvi_num)
             self.heads=64+gvi_num
 
-            self.psp_module=PSPModule(features=self.heads,out_features=feature_nums)
+            self.psp_module=PSPModule(features=self.heads,out_features=feature_nums*(2**self.depth))
             # self.embed_layers=nn.ModuleList()
             # for i in range(depth):
             #     embed_layer=ResBlock(channels=feature_nums*(2**i),drop=drop)
@@ -695,11 +695,15 @@ class UnNamedBlock(nn.Module):
             self.length_list=[32]
             self.layers=nn.ModuleList()
             for i in range(depth):
-                layer=GVIAttentionBlock(num_head=self.feature_nums,
+                layer=GVIAttentionBlock(num_head=self.feature_nums*(2**(depth-i)),
                                         drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
                 self.length_list.append(self.img_size*(2**(i+1)))
+                layer=nn.Conv2d(in_channels=self.feature_nums*(2**(depth-i)),
+                                out_channels=self.feature_nums*(2**(depth-i-1)),
+                                kernel_size=3,padding=1,stride=1)
+                self.layers.append(layer)
                 layer=nn.Upsample(size=(self.img_size*(2**(i+1)),self.img_size*(2**(i+1))),mode='bilinear')
                 #nn.ConvTranspose2d(in_channels=feature_nums*2**(depth-i),out_channels=feature_nums*2**(depth-i-1),kernel_size=2,padding=0,stride=2)
                 self.layers.append(layer)
@@ -714,7 +718,7 @@ class UnNamedBlock(nn.Module):
             x0=x.transpose(1,3)
             x1=self.alpha1(x0) #B W H C
             x2=torch.clamp(self.alpha2(x0),min=0.5+self.eps, max=2-self.eps)
-            gvi=x1*(3-3*x2+x2**2) #~= x1/x2
+            gvi=x1*(4-6*x2+4*x2**2-x2**3) #~= x1/x2
             gvi=self.gvi_norm(gvi.transpose(1,3)) #B C H W
 
             x=torch.cat([gvi,x],dim=1)
@@ -722,10 +726,11 @@ class UnNamedBlock(nn.Module):
             x=x+self.absolute_pos_embed
 
             for i in range(self.depth):
-                x=x.transpose(1,3).contiguous().view(-1,self.length_list[i]**2, self.feature_nums)
-                x=self.layers[2*i](x,feature)+x #gvi attention
-                x=x.view(-1,self.length_list[i],self.length_list[i],self.feature_nums).transpose(1,3)
-                x=self.layers[2*i+1](x)#upsample
+                x=x.transpose(1,3).contiguous().view(-1,self.length_list[i]**2, self.feature_nums*(2**(self.depth-i)))
+                x=self.layers[3*i](x,feature)+x #gvi attention
+                x=x.view(-1,self.length_list[i],self.length_list[i],self.feature_nums*(2**(self.depth-i))).transpose(1,3)
+                x=self.layers[3*i+1](x) #conv
+                x=self.layers[3*i+2](x) #upsample
 
             x=self.conv(x)
             return x #B H W C
@@ -763,7 +768,7 @@ class Decoder(nn.Module):
             self.conv2d_2=nn.Conv2d(256,self.num_classes,kernel_size=1,stride=1,bias=False)
             self.conv3d_1=nn.Conv3d(self.num_layers,1,kernel_size=1,stride=1)
             #self.drop=nn.Dropout(drop_rate)
-            self.mlp_classifier=Mlp(in_features=self.num_layers,hidden_features=128,out_features=1,drop=drop_rate)
+            #self.mlp_classifier=Mlp(in_features=self.num_layers,hidden_features=128,out_features=1,drop=drop_rate)
             self.relu=nn.ReLU()
             self.softmax=nn.LogSoftmax(1)
 
@@ -848,7 +853,7 @@ class MyNet(nn.Module):
         self.decoder=Decoder(img_size=img_size,num_classes=num_classes, patch_size=patch_size,
                             depth_nums=decoder_depth,
                             gvi_nums=gvi_nums,
-                            feature_nums=decoder_features,embed_dim=embed_dim)
+                            feature_nums=decoder_features,embed_dim=embed_dim*2)
 #32 16 8 8 8 4
     def forward(self,x):
         feature=self.swin_backbone(x)

@@ -354,7 +354,7 @@ if __name__ == '__main__':
 
     os.makedirs(config.OUTPUT, exist_ok=True)
     #logger = create_logger(output_dir=config.OUTPUT, dist_rank=rank, name=f"{config.MODEL.NAME}")
-    logger = create_logger(output_dir='/content/drive/MyDrive/SwaNet', dist_rank=rank, name=f"{config.MODEL.NAME}") #for colab training
+    logger = create_logger(output_dir='/content/drive/MyDrive/SwaNet_NoGVI', dist_rank=rank, name=f"{config.MODEL.NAME}") #for colab training
 
     if rank == 0:
         path = os.path.join(config.OUTPUT, "config.json")

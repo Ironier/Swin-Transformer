@@ -541,18 +541,12 @@ class SwinTransformerV2_Backbone(nn.Module):
         self.embed_dim = embed_dim
         self.ape = ape
         self.patch_norm = patch_norm
-        print(self.num_layers,embed_dim)
         self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
         self.mlp_ratio = mlp_ratio
 
-        self.gvi_alpha1=nn.Linear(in_chans,gvi_num,bias=True)
-        self.gvi_alpha2=nn.Linear(in_chans,gvi_num,bias=True)
-        self.eps=1e-6
-        self.gvi_norm = nn.BatchNorm2d(gvi_num)
-
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=in_chans+gvi_num, embed_dim=embed_dim,
+            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
             norm_layer=norm_layer if self.patch_norm else None)
         num_patches = self.patch_embed.num_patches
         patches_resolution = self.patch_embed.patches_resolution
@@ -616,7 +610,6 @@ class SwinTransformerV2_Backbone(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward_features(self, x):
-        outs=[x]
 
         gvi=x.transpose(1,3)
         x1=self.gvi_alpha1(gvi)
@@ -629,27 +622,27 @@ class SwinTransformerV2_Backbone(nn.Module):
         if self.ape:
             x = x + self.absolute_pos_embed
         x = self.pos_drop(x)
+        outs=[x.transpose(1,2)]
         i=0
         for layer in self.layers:
             x,shortcut,H,W = layer(x)
-            print(x.shape)
             if(i<self.num_layers-1):
                 norm_layer = getattr(self, f'norm{i}_prevDs')
                 x_out = norm_layer(shortcut)
-                out = x_out.view(-1, H, W, self.num_features_per_layer[i]).permute(0, 3, 1, 2).contiguous()
+                out = x_out.transpose(1,2) 
                 outs.append(out)
                 norm_layer = getattr(self, f'norm{i}_postDs')
                 x_out = norm_layer(x)
-                out = x_out.view(-1, H//2, W//2, self.num_features_per_layer[i+1]).permute(0, 3, 1, 2).contiguous()
+                out = x_out.transpose(1,2)
                 outs.append(out)
             else:
                 norm_layer = getattr(self, f'norm{i}')
                 x_out = norm_layer(x)
-                out = x_out.view(-1, H, W, self.num_features_per_layer[i+1]).permute(0, 3, 1, 2).contiguous()
+                out = x_out.transpose(1,2) #.view(-1, H, W, self.num_features_per_layer[i]).permute(0, 3, 1, 2).contiguous()
                 outs.append(out)
             i+=1
         output = []
-        for cnt in range(self.layers):
+        for cnt in range(len(self.layers)):
             temp=torch.cat([outs[2*cnt],outs[2*cnt+1]],dim=1)
             output.append(temp)
         return output
@@ -675,22 +668,23 @@ class ShiftWindowAttentionBlock(nn.Module):
             self.num_heads=num_head
             self.softmax=nn.Softmax(dim=1)
             self.img_size=img_size
-            self.mlp=Mlp(feature_size,self.img_size,self.img_size,nn.ReLU,drop)
-            self.norm=norm_layer(img_size)
+            self.mlp=Mlp(feature_size**2,self.img_size**2,self.img_size**2,nn.ReLU,drop)
+            self.norm=norm_layer(img_size**2)
             self.drop = nn.Dropout(drop)
-            self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((1,1,self.num_heads))), requires_grad=True)
+            self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((1,1,img_size**2))), requires_grad=True)
 
         def forward(self,x,feature):
             """
             x: B C H*W
             feature: B C H*W
             """
+            #print(feature.shape)
             feature=self.mlp(feature).transpose(1,2)
             logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01)).to(device)).exp()
-            x=x.transpose(1,2)
+            #print(feature.shape, x.shape, logit_scale.shape)
             temp=torch.bmm(feature,x)*logit_scale #//q*k
             temp=self.softmax(temp)
-            x=x*temp
+            x=torch.bmm(x,temp)
             x=self.norm(x)
             x=self.drop(x)
             return x
@@ -718,20 +712,24 @@ class UnNamedBlock(nn.Module):
             for i in range(depth):
                 layer=nn.Conv2d(in_channels=feature_nums*2//(2**i),out_channels=feature_nums//(2**i),kernel_size=3,padding=1)
                 self.layers.append(layer)
-                layer=ShiftWindowAttentionBlock(img_size=img_size*2**i,num_head=feature_nums//(2**i))
+                layer=ShiftWindowAttentionBlock(img_size=img_size*2**i,feature_size=img_size*2**(i+1),num_head=feature_nums//(2**i))
                 self.layers.append(layer)
-                layer=nn.Upsample(size=(img_size*2**i,img_size*2**(i+1)),mode='bilinear')
+                layer=nn.Upsample(size=(img_size*2**(i+1),img_size*2**(i+1)),mode='bilinear')
                 self.layers.append(layer)
-            self.upsample1=PSPUpsample(embed_dim,embed_dim*2)
-            self.upsample2=PSPUpsample(embed_dim*2,embed_dim)
+            self.upsample1=PSPUpsample(embed_dim*2,embed_dim)
+            self.upsample2=PSPUpsample(embed_dim,embed_dim)
 
 
         def forward(self,x,feature):
             l = len(feature)
+            x=x.view(-1,self.feature_nums*2,self.img_size,self.img_size)
             for i in range(l):
-                x=self.layers[3*i] #CONV
-                x=self.layers[3*i+1](x,feature[i]) #SWA
-                x=self.layers[3*i+1](x) #UpSample
+                x=self.layers[3*i](x) #CONV
+                x=x.view(-1,self.feature_nums//(2**i),(self.img_size*2**i)**2)
+                x=self.layers[3*i+1](x,feature[l-i-1]) #SWA
+                x=x.view(-1,self.feature_nums//(2**i),self.img_size*2**i,self.img_size*2**i)
+                x=self.layers[3*i+2](x) #UpSample
+            #print(x.shape)
             x=self.upsample1(x)
             x=self.upsample2(x)
             return x #B H W C
@@ -760,7 +758,7 @@ class Decoder(nn.Module):
             self.embed_dim=embed_dim
             self.layers=nn.ModuleList()
             for i in range(self.num_layers):
-                layer=UnNamedBlock(depth=i,feature_nums=embed_dim* 2**i,img_size=(img_size//(patch_size* 2**i)),embed_dim=embed_dim,
+                layer=UnNamedBlock(depth=i+1,feature_nums=embed_dim* 2**i,img_size=img_size//(patch_size* 2**i),embed_dim=embed_dim,
                                         drop=drop_rate, attn_drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
@@ -773,7 +771,8 @@ class Decoder(nn.Module):
             self.softmax=nn.LogSoftmax(1)
 
         def forward(self,feature):
-            B,C,H,W = feature[0].shape
+            B,C,HW = feature[0].shape
+            H = W =self.img_size
             res=torch.zeros((B,self.embed_dim,H,W,self.num_layers)).to(device)
             cnt=0
             for i in range(1,self.num_layers):

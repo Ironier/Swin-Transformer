@@ -543,10 +543,12 @@ class SwinTransformerV2_Backbone(nn.Module):
         self.patch_norm = patch_norm
         self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
         self.mlp_ratio = mlp_ratio
-
+        self.eps=1e-6
+        self.alpha1=nn.Linear(3,gvi_num,bias=qkv_bias)
+        self.alpha2=nn.Linear(3,gvi_num,bias=qkv_bias)
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
+            img_size=img_size, patch_size=patch_size, in_chans=in_chans+gvi_num, embed_dim=embed_dim,
             norm_layer=norm_layer if self.patch_norm else None)
         num_patches = self.patch_embed.num_patches
         patches_resolution = self.patch_embed.patches_resolution
@@ -610,13 +612,12 @@ class SwinTransformerV2_Backbone(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward_features(self, x):
-
-        gvi=x.transpose(1,3)
-        x1=self.gvi_alpha1(gvi)
-        x2=torch.clamp(self.gvi_alpha2(gvi),min=0.5+self.eps, max=2-self.eps)
-        gvi=x1*(4-6*x2+4*x2**2-x2**3) #~= x1/x2
-        gvi=self.gvi_norm(gvi.transpose(1,3))
-        x=torch.cat([x,gvi],dim=1)
+        gvis=x.transpose(1,3)
+        x1=self.alpha1(gvis)
+        x2=torch.clamp(self.alpha2(gvis),min=0.5+self.eps,max=2-self.eps)
+        gvis=x1*(4-6*x2+4*x2**3-x2**3) # ~= x1/x2
+        gvis=gvis.transpose(1,3)
+        x=torch.concat([gvis,x],1)
 
         x = self.patch_embed(x)
         if self.ape:
@@ -716,8 +717,7 @@ class UnNamedBlock(nn.Module):
                 self.layers.append(layer)
                 layer=nn.Upsample(size=(img_size*2**(i+1),img_size*2**(i+1)),mode='bilinear')
                 self.layers.append(layer)
-            self.upsample1=PSPUpsample(embed_dim*2,embed_dim)
-            self.upsample2=PSPUpsample(embed_dim,embed_dim)
+            #self.conv=nn.Conv2d(in_channels=feature_nums*4//(2**depth),out_channels=feature_nums*2//(2**depth),kernel_size=3,padding=1)
 
 
         def forward(self,x,feature):
@@ -729,9 +729,8 @@ class UnNamedBlock(nn.Module):
                 x=self.layers[3*i+1](x,feature[l-i-1]) #SWA
                 x=x.view(-1,self.feature_nums//(2**i),self.img_size*2**i,self.img_size*2**i)
                 x=self.layers[3*i+2](x) #UpSample
+            #x=self.conv(x)
             #print(x.shape)
-            x=self.upsample1(x)
-            x=self.upsample2(x)
             return x #B H W C
 
         def flops(self):
@@ -753,7 +752,7 @@ class Decoder(nn.Module):
             super().__init__()
             self.img_size = img_size
             self.patch_size = patch_size
-            self.num_layers = 3
+            self.num_layers = 4
             self.num_classes=num_classes+1
             self.embed_dim=embed_dim
             self.layers=nn.ModuleList()
@@ -762,9 +761,14 @@ class Decoder(nn.Module):
                                         drop=drop_rate, attn_drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
-            self.conv2d_1=nn.Conv2d(embed_dim,embed_dim,kernel_size=1,stride=1)
+            self.pspmodule=PSPModule(features=embed_dim*2**self.num_layers,out_features=1024)
+            self.upsample1=PSPUpsample(1024, 512, 8)
+            self.upsample3=PSPUpsample(512+embed_dim*6,embed_dim*4)
+            self.drop3=nn.Dropout2d(drop_rate)
+            self.upsample4=PSPUpsample(embed_dim*4,embed_dim)
+            self.drop4=nn.Dropout2d(drop_rate)
+            self.conv2d_1=nn.Conv2d(embed_dim,embed_dim,kernel_size=3,padding=1,stride=1)
             self.conv2d_2=nn.Conv2d(embed_dim,self.num_classes,kernel_size=1,stride=1)
-            self.conv3d_1=nn.Conv3d(self.num_layers,1,kernel_size=1,stride=1)
             #self.drop=nn.Dropout(drop_rate)
             #self.mlp_classifier=Mlp(in_features=self.num_layers,hidden_features=128,out_features=1,drop=drop_rate)
             self.relu=nn.ReLU()
@@ -773,15 +777,23 @@ class Decoder(nn.Module):
         def forward(self,feature):
             B,C,HW = feature[0].shape
             H = W =self.img_size
-            res=torch.zeros((B,self.embed_dim,H,W,self.num_layers)).to(device)
+            res=None
             cnt=0
             for i in range(1,self.num_layers):
                 temp=self.layers[i](feature[i],feature[0:i]) #Block
-                res[:,:,:,:,cnt]=temp #B embed_dim H W
+                if res is not None:
+                    res=torch.cat([res,temp],dim=1)#B embed_dim 64 64
+                else:
+                    res=temp
                 cnt+=1
 
-            res=res.transpose(1,4) #B CNT H W C
-            res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
+            psp=self.pspmodule(feature[-1].view(-1,2048,8,8))
+            psp=self.upsample1(psp)
+            res=torch.cat([res,psp],dim=1)
+            res=self.upsample3(res)
+            res=self.drop3(res) #drop
+            res=self.upsample4(res)
+            res=self.drop4(res) #drop
             output=self.conv2d_1(res) #B W H C
             output=self.relu(output)
             #output=self.mlp_classifier(output).transpose(1,3) #B C H W
@@ -907,28 +919,29 @@ class MyNet(nn.Module):
 
 #             return x
 
-# class PSPModule(nn.Module):
-#     def __init__(self, features, out_features=1024, sizes=(1, 2, 3, 6)):
-#         super().__init__()
-#         self.stages = []
-#         self.stages = nn.ModuleList([self._make_stage(features, size) for size in sizes])
-#         self.bottleneck = nn.Conv2d(features * (len(sizes) + 1), out_features, kernel_size=1)
-#         self.relu = nn.ReLU()
+class PSPModule(nn.Module):
+    def __init__(self, features, out_features=1024, sizes=(1, 2, 3, 6)):
+        super().__init__()
+        self.stages = []
+        self.stages = nn.ModuleList([self._make_stage(features, size) for size in sizes])
+        self.bottleneck = nn.Conv2d(features * (len(sizes) + 1), out_features, kernel_size=1)
+        self.relu = nn.ReLU()
 
-#     def _make_stage(self, features, size):
-#         prior = nn.AdaptiveAvgPool2d(output_size=(size, size))
-#         conv = nn.Conv2d(features, features, kernel_size=1, bias=False)
-#         return nn.Sequential(prior, conv)
+    def _make_stage(self, features, size):
+        prior = nn.AdaptiveAvgPool2d(output_size=(size, size))
+        conv = nn.Conv2d(features, features, kernel_size=1, bias=False)
+        return nn.Sequential(prior, conv)
 
-#     def forward(self, feats):
-#         h, w = feats.size(2), feats.size(3)
-#         priors = [F.interpolate(input=stage(feats), size=(h, w), mode='bilinear') for stage in self.stages] + [feats]
-#         bottle = self.bottleneck(torch.cat(priors, 1))
-#         return self.relu(bottle)
+    def forward(self, feats):
+        h, w = feats.size(2), feats.size(3)
+        priors = [F.interpolate(input=stage(feats), size=(h, w), mode='bilinear') for stage in self.stages] + [feats]
+        bottle = self.bottleneck(torch.cat(priors, 1))
+        return self.relu(bottle)
 
 class PSPUpsample(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, multi=2):
         super().__init__()
+        self.multi = multi
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, 3, padding=1),
             nn.BatchNorm2d(out_channels),
@@ -936,7 +949,7 @@ class PSPUpsample(nn.Module):
         )
 
     def forward(self, x):
-        h, w = 2 * x.size(2), 2 * x.size(3)
+        h, w = self.multi * x.size(2), self.multi * x.size(3)
         p = F.interpolate(input=x, size=(h, w), mode='bilinear')
         return self.conv(p)
 

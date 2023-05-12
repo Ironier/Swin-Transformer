@@ -542,6 +542,10 @@ class SwinTransformerV2_Backbone(nn.Module):
         self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
         self.mlp_ratio = mlp_ratio
 
+        self.eps=1e-6
+        self.alpha1=nn.Linear(3,gvi_num,bias=qkv_bias)
+        self.alpha2=nn.Linear(3,gvi_num,bias=qkv_bias)
+
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
             img_size=img_size, patch_size=patch_size, in_chans=in_chans+gvi_num, embed_dim=embed_dim,

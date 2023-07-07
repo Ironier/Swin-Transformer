@@ -430,8 +430,11 @@ class BasicLayer(nn.Module):
             else:
                 x = blk(x)
         if self.downsample is not None:
+            shortcut = x
             x = self.downsample(x)
-        return x
+        else:
+            shortcut = None
+        return x, shortcut, self.input_resolution[0], self.input_resolution[1]
 
     def extra_repr(self) -> str:
         return f"dim={self.dim}, input_resolution={self.input_resolution}, depth={self.depth}"
@@ -538,17 +541,12 @@ class SwinTransformerV2_Backbone(nn.Module):
         self.embed_dim = embed_dim
         self.ape = ape
         self.patch_norm = patch_norm
-        print(self.num_layers,embed_dim)
         self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
         self.mlp_ratio = mlp_ratio
 
-        self.eps=1e-6
-        self.alpha1=nn.Linear(3,gvi_num,bias=qkv_bias)
-        self.alpha2=nn.Linear(3,gvi_num,bias=qkv_bias)
-
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=in_chans+gvi_num, embed_dim=embed_dim,
+            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
             norm_layer=norm_layer if self.patch_norm else None)
         num_patches = self.patch_embed.num_patches
         patches_resolution = self.patch_embed.patches_resolution
@@ -583,7 +581,19 @@ class SwinTransformerV2_Backbone(nn.Module):
                                pretrained_window_size=pretrained_window_sizes[i_layer])
             self.layers.append(layer)
 
-        self.norm = norm_layer(self.num_features)
+        self.num_features_per_layer = [int(embed_dim * 2 ** i) for i in range(self.num_layers)]
+        for i_layer in range(self.num_layers-1):
+            layer = norm_layer(self.num_features_per_layer[i_layer])
+            layer_name = f'norm{i_layer}_prevDs'
+            self.add_module(layer_name, layer)
+            layer = norm_layer(self.num_features_per_layer[i_layer+1])
+            layer_name = f'norm{i_layer}_postDs'
+            self.add_module(layer_name, layer)
+        layer = norm_layer(self.num_features_per_layer[self.num_layers-1])
+        layer_name = f'norm{self.num_layers-1}'
+        self.add_module(layer_name, layer)
+
+        #self.norm = norm_layer(self.num_features)
         #self.avgpool = nn.AdaptiveAvgPool1d(64)
 
         self.apply(self._init_weights)
@@ -600,18 +610,30 @@ class SwinTransformerV2_Backbone(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward_features(self, x):
-
         x = self.patch_embed(x)
         if self.ape:
             x = x + self.absolute_pos_embed
         x = self.pos_drop(x)
-
+        outs=[x.transpose(1,2)]
+        i=0
         for layer in self.layers:
-            x = layer(x)
-
-        x = self.norm(x)  # B L C
-        #x = self.avgpool(x.transpose(1, 2)) # B 1 L
-        return x
+            x,shortcut,H,W = layer(x)
+            if(i<self.num_layers-1):
+                norm_layer = getattr(self, f'norm{i}_prevDs')
+                x_out = norm_layer(shortcut)
+                out = x_out.transpose(1,2).contiguous()
+                outs.append(out)
+                norm_layer = getattr(self, f'norm{i}_postDs')
+                x_out = norm_layer(x)
+                out = x_out.transpose(1,2).contiguous()
+                outs.append(out)
+            else:
+                norm_layer = getattr(self, f'norm{i}')
+                x_out = norm_layer(x)
+                out = x_out.transpose(1,2).contiguous() #.view(-1, H, W, self.num_features_per_layer[i]).permute(0, 3, 1, 2).contiguous()
+                outs.append(out)
+            i+=1
+        return outs
 
     def forward(self, x):
         x = self.forward_features(x)
@@ -626,30 +648,33 @@ class SwinTransformerV2_Backbone(nn.Module):
         #flops += self.num_features * self.num_classes
         return flops
 
-class GVIAttentionBlock(nn.Module):
-        def __init__(self,img_size=256,num_head=6,
+class ShiftWindowAttentionBlock(nn.Module):
+        def __init__(self,img_size=64,feature_size=256,num_head=6,
                             drop=0,
                             norm_layer=nn.LayerNorm):
             super().__init__()
             self.num_heads=num_head
-            self.conv1=nn.Conv1d(64,self.num_heads,kernel_size=1,stride=1,padding=0)
             self.softmax=nn.Softmax(dim=1)
             self.img_size=img_size
-            self.mlp=Mlp(1024,self.num_heads,self.num_heads,nn.ReLU,drop)
-            self.norm=norm_layer(num_head)
+            self.mlp=Mlp(feature_size**2,self.img_size**2,self.img_size**2,nn.ReLU,drop)
+            self.norm=norm_layer(img_size**2)
             self.drop = nn.Dropout(drop)
-            self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((1,1,self.num_heads))), requires_grad=True)
+            self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((1,1,img_size**2))), requires_grad=True)
 
         def forward(self,x,feature):
-            feature=self.mlp(feature)
-            feature=self.conv1(feature) #B num_heads num_heads
+            """
+            x: B C H*W
+            feature: B C H*W
+            """
+            #print(feature.shape)
+            feature=self.mlp(feature).transpose(1,2)
             logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01)).to(device)).exp()
-            temp=torch.bmm(x,feature)*logit_scale #//q*k
-            #feature=self.conv2(feature) #B H*W num_heads
-            temp=self.softmax(temp) #B H*W num_heads
-            x=temp*x #B H*W num_heads
-            x=self.drop(x)
+            #print(feature.shape, x.shape, logit_scale.shape)
+            temp=torch.bmm(feature,x)*logit_scale #//q*k
+            temp=self.softmax(temp)
+            x=torch.bmm(x,temp)
             x=self.norm(x)
+            x=self.drop(x)
             return x
 
         def flops(self):
@@ -661,68 +686,69 @@ class GVIAttentionBlock(nn.Module):
             #     flops+=self.dropout.flops()
             return flops
 
+class ChannelAttentionBlock(nn.Module):
+        def __init__(self,img_size=64,feature_size=256,num_head=6,
+                            drop=0,
+                            norm_layer=nn.LayerNorm):
+            super().__init__()
+            self.num_heads=num_head
+            self.softmax=nn.Softmax(dim=1)
+            self.img_size=img_size
+            self.mlp=Mlp(feature_size**2,feature_size**2,self.img_size**2,nn.ReLU,drop)
+            self.norm=norm_layer(num_head)
+            self.drop = nn.Dropout(drop)
+            self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((1,1,img_size**2))), requires_grad=True)
+
+        def forward(self,x,feature):
+            """
+            x: B C H*W
+            feature: B C H*W
+            """
+            #print(feature.shape)
+            x=x.transpose(1,2)
+            feature=self.mlp(feature)
+            logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1. / 0.01)).to(device)).exp()
+            #print(feature.shape, x.shape, logit_scale.shape)
+            temp=torch.bmm(x,feature)*logit_scale #//q*k
+            temp=self.softmax(temp)
+            x=torch.bmm(temp,x)
+            x=self.norm(x).transpose(1,2)
+            x=self.drop(x)
+            return x
+
+        def flops(self):
+            flops = 0
+            # flops+=self.conv.flops()
+            # flops+=self.softmax.flops()
+            # flops+=self.norm.flops()
+            # if self.dropout is not None:
+            #     flops+=self.dropout.flops()
+            return flops
 
 class UnNamedBlock(nn.Module):
 
-        def __init__(self,depth=2,feature_nums=3,img_size=256,gvi_num=4,patch_size=4,embed_dim=96,
-                            qkv_bias=True,
+        def __init__(self,depth=2,feature_nums=3,img_size=256,embed_dim=96,
                             drop=0.1, attn_drop=0.1,
-                            norm_layer=nn.LayerNorm):
+                            norm_layer=nn.LayerNorm,upsample_size=64):
             super().__init__()
             self.feature_nums=feature_nums
-            self.img_size = img_size // (2**depth)
+            self.img_size = img_size
             self.depth=depth
-
-            self.heads=64
-
-            self.psp_module=PSPModule(features=self.heads,out_features=feature_nums*(2**self.depth))
-            # self.embed_layers=nn.ModuleList()
-            # for i in range(depth):
-            #     embed_layer=ResBlock(channels=feature_nums*(2**i),drop=drop)
-            #     self.embed_layers.append(embed_layer)
-            #     embed_layer=PatchMerging(input_resolution=(self.img_size//(2**i),self.img_size//(2**i)),dim=feature_nums*(2**i))
-            #     self.embed_layers.append(embed_layer)
-            self.length_list=[32]
-            self.layers=nn.ModuleList()
-            for i in range(depth):
-                layer=GVIAttentionBlock(num_head=self.feature_nums*(2**(depth-i)),
-                                        drop=attn_drop,
-                                        norm_layer=norm_layer)
-                self.layers.append(layer)
-                self.length_list.append(self.img_size*(2**(i+1)))
-                layer=nn.Conv2d(in_channels=self.feature_nums*(2**(depth-i)),
-                                out_channels=self.feature_nums*(2**(depth-i-1)),
-                                kernel_size=3,padding=1,stride=1)
-                self.layers.append(layer)
-                layer=nn.Upsample(size=(self.img_size*(2**(i+1)),self.img_size*(2**(i+1))),mode='bilinear')
-                #nn.ConvTranspose2d(in_channels=feature_nums*2**(depth-i),out_channels=feature_nums*2**(depth-i-1),kernel_size=2,padding=0,stride=2)
-                self.layers.append(layer)
-
-            #self.absolute_pos_embed = nn.Parameter(torch.zeros(1,self.feature_nums,32,32))
-            #trunc_normal_(self.absolute_pos_embed, std=.02)
-
-            self.conv=nn.Conv2d(in_channels=feature_nums,out_channels=embed_dim,kernel_size=3,stride=1,padding=1)
+            self.swablock=ShiftWindowAttentionBlock(img_size=img_size,feature_size=img_size,num_head=feature_nums,drop=attn_drop)
+            self.aspp=ASPP(feature_nums,512,[1,4,6])
+            self.upsample=PSPUpsample(512,embed_dim*2,upsample_size//self.img_size)
+            #self.conv=nn.Conv2d(in_channels=feature_nums*4//(2**depth),out_channels=feature_nums*2//(2**depth),kernel_size=3,padding=1)
 
 
         def forward(self,x,feature):
-            # x0=x.transpose(1,3)
-            # x1=self.alpha1(x0) #B W H C
-            # x2=torch.clamp(self.alpha2(x0),min=0.5+self.eps, max=2-self.eps)
-            # gvi=x1*(4-6*x2+4*x2**2-x2**3) #~= x1/x2
-            # gvi=self.gvi_norm(gvi.transpose(1,3)) #B C H W
-
-            # x=torch.cat([gvi,x],dim=1)
-            x=self.psp_module(x) #B feature_nums H W
-            #x=x+self.absolute_pos_embed
-
-            for i in range(self.depth):
-                x=x.transpose(1,3).contiguous().view(-1,self.length_list[i]**2, self.feature_nums*(2**(self.depth-i)))
-                x=self.layers[3*i](x,feature)+x #gvi attention
-                x=x.view(-1,self.length_list[i],self.length_list[i],self.feature_nums*(2**(self.depth-i))).transpose(1,3)
-                x=self.layers[3*i+1](x) #conv
-                x=self.layers[3*i+2](x) #upsample
-
-            x=self.conv(x)
+            #x=x.view(-1,self.feature_nums,self.img_size/self.img_size)
+            x=self.swablock(x,feature)+x #SWA
+            x=x.view(-1,self.feature_nums,self.img_size,self.img_size)
+            #print(x.shape)
+            x=self.aspp(x)
+            x=self.upsample(x)
+            #x=self.conv(x)
+            #print(x.shape)
             return x #B H W C
 
         def flops(self):
@@ -744,49 +770,65 @@ class Decoder(nn.Module):
             super().__init__()
             self.img_size = img_size
             self.patch_size = patch_size
-            self.num_layers=len(depth_nums)
-            self.num_classes=num_classes+1
-            self.embed_dim=embed_dim
+            self.num_layers = 4
+            self.num_classes = num_classes+1
+            self.embed_dim = embed_dim
             self.layers=nn.ModuleList()
             for i in range(self.num_layers):
-                layer=UnNamedBlock(depth=depth_nums[i],gvi_num=gvi_nums[i],feature_nums=feature_nums[i],img_size=img_size,patch_size=patch_size,embed_dim=embed_dim,
-                                        qkv_bias=qkv_bias,
+                layer=UnNamedBlock(depth=i+1,feature_nums=embed_dim*2**i,img_size=(self.img_size//self.patch_size)//2**i,embed_dim=embed_dim,
                                         drop=drop_rate, attn_drop=attn_drop,
                                         norm_layer=norm_layer)
                 self.layers.append(layer)
-            self.conv2d_1=nn.Conv2d(embed_dim,embed_dim,kernel_size=1,stride=1)
-            self.conv2d_2=nn.Conv2d(embed_dim,self.num_classes,kernel_size=1,stride=1)
-            self.conv3d_1=nn.Conv3d(self.num_layers,1,kernel_size=1,stride=1)
+            self.pspmodule=PSPModule(features=1024,out_features=1024)
+            self.upsample1=PSPUpsample(1024, embed_dim*6, 8)
+            self.drop1=nn.Dropout2d(drop_rate)
+
+            self.conv2d_1=nn.Conv2d(embed_dim*4,embed_dim*2,kernel_size=3,padding=1,stride=1)
+            self.conv2d_2=nn.Conv2d(embed_dim*2,self.num_classes,kernel_size=1,stride=1)
+            self.norm=nn.BatchNorm2d(embed_dim*2)
+            self.relu=nn.ReLU(inplace=True)
+            self.upsample3=PSPUpsample(embed_dim*15,embed_dim*4)
+            self.drop3=nn.Dropout2d(drop_rate)
+            self.upsample4=PSPUpsample(embed_dim*4,embed_dim*4)
+            self.drop4=nn.Dropout2d(drop_rate)
             #self.drop=nn.Dropout(drop_rate)
             #self.mlp_classifier=Mlp(in_features=self.num_layers,hidden_features=128,out_features=1,drop=drop_rate)
-            self.relu=nn.ReLU()
-            self.softmax=nn.LogSoftmax(1)
+            #self.softmax=nn.LogSoftmax(1)
 
         def forward(self,feature):
-            #B H W C
-            x=feature.view(-1,64,32,32)
-            channels=self.embed_dim
-            res=torch.zeros((x.shape[0],channels,self.img_size,self.img_size,self.num_layers)).to(device)
+            res=None
             cnt=0
             for i in range(self.num_layers):
-                temp=self.layers[i](x,feature) #Block
-                res[:,:,:,:,cnt]=temp #B 3 H W
+                temp=self.layers[i](feature[2*i+1],feature[2*i]) #Block
+                if res is not None:
+                    res=torch.cat([res,temp],dim=1)#B embed_dim 64 64
+                else:
+                    res=temp
                 cnt+=1
+            psp=feature[-1].view(-1,1024,8,8)
+            #print(psp.shape)
+            psp=self.pspmodule(psp)
+            psp=self.upsample1(psp)
+            psp=self.drop1(psp)
+            res=torch.cat([feature[1].view(-1,self.embed_dim,self.img_size//self.patch_size,self.img_size//self.patch_size),psp,res],dim=1)
 
-            res=res.transpose(1,4) #B CNT H W C
-            res=self.conv3d_1(res).transpose(1,4).squeeze() #0 4 2 3 1 -> 0 1 2 3
-            output=self.conv2d_1(res) #B W H C
+            output=self.upsample3(res)
+            output=self.drop3(output)
+            output=self.upsample4(output)
+            output=self.drop4(output)
+
+            output=self.conv2d_1(output)
+            output=self.norm(output)
             output=self.relu(output)
-            #output=self.mlp_classifier(output).transpose(1,3) #B C H W
             output=self.conv2d_2(output)
-            output=self.softmax(output)
+
             return output
 
         @torch.no_grad()
         def forward_test(self,feature):
-            x=feature.view(-1,64,32,32)
+            B,C,H,W = feature[0].shape
             channels=self.embed_dim
-            res=torch.zeros((x.shape[0],channels,self.img_size,self.img_size,self.num_layers)).to(device)
+            res=torch.zeros((B,channels,self.img_size,self.img_size,self.num_layers)).to(device)
             output2=torch.zeros((x.shape[0],self.num_classes,self.img_size,self.img_size,self.num_layers)).to(device)
             cnt=0
             for i in range(self.num_layers):
@@ -818,6 +860,117 @@ class Decoder(nn.Module):
             # flops+=self.norm.flops()
             return flops
 
+class DeepLabHeadV3Plus(nn.Module):
+    def __init__(self, in_channels, low_level_channels, num_classes, aspp_dilate=[12, 24, 36]):
+        super(DeepLabHeadV3Plus, self).__init__()
+        self.project = nn.Sequential(
+            nn.Conv2d(low_level_channels, 48, 1, bias=False),
+            nn.BatchNorm2d(48),
+            nn.ReLU(inplace=True),
+        )
+
+        self.aspp = ASPP(in_channels, aspp_dilate)
+
+        self.classifier = nn.Sequential(
+            nn.Conv2d(304, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, num_classes, 1)
+        )
+        self._init_weight()
+
+    def forward(self, feature):
+        low_level_feature = self.project( feature['low_level'] )
+        output_feature = self.aspp(feature['out'])
+        output_feature = F.interpolate(output_feature, size=low_level_feature.shape[2:], mode='bilinear', align_corners=False)
+        return self.classifier( torch.cat( [ low_level_feature, output_feature ], dim=1 ) )
+
+    def _init_weight(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+
+class AtrousSeparableConvolution(nn.Module):
+    """ Atrous Separable Convolution
+    """
+    def __init__(self, in_channels, out_channels, kernel_size,
+                            stride=1, padding=0, dilation=1, bias=True):
+        super(AtrousSeparableConvolution, self).__init__()
+        self.body = nn.Sequential(
+            # Separable Conv
+            nn.Conv2d( in_channels, in_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, bias=bias, groups=in_channels ),
+            # PointWise Conv
+            nn.Conv2d( in_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=bias),
+        )
+
+        self._init_weight()
+
+    def forward(self, x):
+        return self.body(x)
+
+    def _init_weight(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+class ASPPConv(nn.Sequential):
+    def __init__(self, in_channels, out_channels, dilation):
+        modules = [
+            nn.Conv2d(in_channels, out_channels, 3, padding=dilation, dilation=dilation, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        ]
+        super(ASPPConv, self).__init__(*modules)
+
+class ASPPPooling(nn.Sequential):
+    def __init__(self, in_channels, out_channels):
+        super(ASPPPooling, self).__init__(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True))
+
+    def forward(self, x):
+        size = x.shape[-2:]
+        x = super(ASPPPooling, self).forward(x)
+        return F.interpolate(x, size=size, mode='bilinear', align_corners=False)
+
+class ASPP(nn.Module):
+    def __init__(self, in_channels, out_channels, atrous_rates):
+        super(ASPP, self).__init__()
+        modules = []
+        modules.append(nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)))
+
+        rate1, rate2, rate3 = tuple(atrous_rates)
+        modules.append(ASPPConv(in_channels, out_channels, rate1))
+        modules.append(ASPPConv(in_channels, out_channels, rate2))
+        modules.append(ASPPConv(in_channels, out_channels, rate3))
+        modules.append(ASPPPooling(in_channels, out_channels))
+
+        self.convs = nn.ModuleList(modules)
+
+        self.project = nn.Sequential(
+            nn.Conv2d(5 * out_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),)
+
+    def forward(self, x):
+        res = []
+        for conv in self.convs:
+            res.append(conv(x))
+        res = torch.cat(res, dim=1)
+        return self.project(res)
 
 class MyNet(nn.Module):
     r"""
@@ -827,7 +980,7 @@ class MyNet(nn.Module):
     def __init__(self, img_size=224, patch_size=4, in_chans=3, num_classes=15,
                  embed_dim=96, depths=[2, 2, 6, 2], num_heads=[3, 6, 12, 24],
                  window_size=7, mlp_ratio=4., qkv_bias=True,
-                 drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1,
+                 drop_rate=0., attn_drop_rate=0.1, drop_path_rate=0.1,
                  norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
                  use_checkpoint=False, pretrained_window_sizes=[0, 0, 0, 0],
                  decoder_depth=[1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3, 2, 1],
@@ -847,7 +1000,7 @@ class MyNet(nn.Module):
 #32 16 8 8 8 4
     def forward(self,x):
         feature=self.swin_backbone(x)
-        x=self.decoder.forward(feature)
+        x=self.decoder(feature)
         return x
 
     @torch.no_grad()
@@ -915,23 +1068,24 @@ class PSPModule(nn.Module):
 
     def forward(self, feats):
         h, w = feats.size(2), feats.size(3)
-        priors = [F.interpolate(input=stage(feats), size=(h, w), mode='bilinear') for stage in self.stages] + [feats]
+        priors = [F.interpolate(input=stage(feats), size=(h, w), mode='bilinear',align_corners=True) for stage in self.stages] + [feats]
         bottle = self.bottleneck(torch.cat(priors, 1))
         return self.relu(bottle)
 
-# class PSPUpsample(nn.Module):
-#     def __init__(self, in_channels, out_channels):
-#         super().__init__()
-#         self.conv = nn.Sequential(
-#             nn.Conv2d(in_channels, out_channels, 3, padding=1),
-#             nn.BatchNorm2d(out_channels),
-#             nn.PReLU()
-#         )
+class PSPUpsample(nn.Module):
+    def __init__(self, in_channels, out_channels, multi=2):
+        super().__init__()
+        self.multi = multi
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.PReLU()
+        )
 
-#     def forward(self, x):
-#         h, w = 2 * x.size(2), 2 * x.size(3)
-#         p = F.interpolate(input=x, size=(h, w), mode='bilinear')
-#         return self.conv(p)
+    def forward(self, x):
+        h, w = self.multi * x.size(2), self.multi * x.size(3)
+        p = F.interpolate(input=x, size=(h, w), mode='bilinear',align_corners=True)
+        return self.conv(p)
 
 # class PSPNet(nn.Module):
 #     def __init__(self, n_classes=18, sizes=(1, 2, 3, 6), psp_size=2048):#, deep_features_size=1024, backend='resnet34', pretrained=True):

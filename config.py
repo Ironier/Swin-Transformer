@@ -159,7 +159,7 @@ _C.TRAIN.BASE_LR = 3e-4
 _C.TRAIN.WARMUP_LR = 5e-7
 _C.TRAIN.MIN_LR = 5e-6
 # Clip gradient norm
-_C.TRAIN.CLIP_GRAD = 10
+_C.TRAIN.CLIP_GRAD = 5
 # Auto resume from latest checkpoint
 _C.TRAIN.AUTO_RESUME = True
 # Gradient accumulation steps
@@ -214,13 +214,13 @@ _C.AUG.REMODE = 'pixel'
 # Random erase count
 _C.AUG.RECOUNT = 0
 # Mixup alpha, mixup enabled if > 0
-_C.AUG.MIXUP = 0
+_C.AUG.MIXUP = 0.1
 # Cutmix alpha, cutmix enabled if > 0
-_C.AUG.CUTMIX = 1.0
+_C.AUG.CUTMIX = 0.25
 # Cutmix min/max ratio, overrides alpha and enables cutmix if set
 _C.AUG.CUTMIX_MINMAX = None
 # Probability of performing mixup or cutmix when either/both is enabled
-_C.AUG.MIXUP_PROB = 1.0
+_C.AUG.MIXUP_PROB = 0.8
 # Probability of switching to cutmix when both mixup and cutmix enabled
 _C.AUG.MIXUP_SWITCH_PROB = 0.5
 # How to apply mixup/cutmix params. Per "batch", "pair", or "elem"
@@ -240,7 +240,7 @@ _C.TEST.SHUFFLE = False
 # Misc
 # -----------------------------------------------------------------------------
 # [SimMIM] Whether to enable pytorch amp, overwritten by command line argument
-_C.ENABLE_AMP = False
+_C.ENABLE_AMP = True
 
 # Enable Pytorch automatic mixed precision (amp).
 _C.AMP_ENABLE = True

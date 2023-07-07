@@ -140,7 +140,11 @@ def main(config):
             logger.info(f'no checkpoint found in {config.OUTPUT}, ignoring auto resume')
 
     if config.MODEL.RESUME:
-        max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, loss_scaler, logger)
+        try:
+            max_accuracy = load_checkpoint(config, model_without_ddp, optimizer, lr_scheduler, loss_scaler, logger)
+        except Exception as e:
+            logger.info(e)
+            logger.info(f"model load failed. You may have changed the model")
         if config.MODEL.PRETRAINED:
              load_pretrained(config, model_without_ddp, logger)
         acc1, loss = validate(config, data_loader_val, model)
@@ -164,7 +168,7 @@ def main(config):
 
         train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, mixup_fn, lr_scheduler,
                         loss_scaler)
-        if rank == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
+        if (rank == 0 or world_size == 1) and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
             save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, loss_scaler,
                             logger)
 
@@ -201,20 +205,17 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
 
         with torch.cuda.amp.autocast(enabled=config.AMP_ENABLE):
             outputs = model(samples)
-
-        loss = criterion(outputs, targets)
-        loss = loss / config.TRAIN.ACCUMULATION_STEPS
-
-
-        # this attribute is added by timm on one optimizer (adahessian)
-        is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
-        grad_norm = loss_scaler(loss, optimizer, clip_grad=config.TRAIN.CLIP_GRAD,
-                                parameters=model.parameters(), create_graph=is_second_order,
-                                update_grad=(idx + 1) % config.TRAIN.ACCUMULATION_STEPS == 0)
-        if (idx + 1) % config.TRAIN.ACCUMULATION_STEPS == 0:
-            optimizer.zero_grad()
-            lr_scheduler.step_update((epoch * num_steps + idx) // config.TRAIN.ACCUMULATION_STEPS)
-        loss_scale_value = loss_scaler.state_dict()["scale"]
+            loss = criterion(outputs, targets)
+            loss = loss / config.TRAIN.ACCUMULATION_STEPS
+            # this attribute is added by timm on one optimizer (adahessian)
+            is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
+            grad_norm = loss_scaler(loss, optimizer, clip_grad=config.TRAIN.CLIP_GRAD,
+                                    parameters=model.parameters(), create_graph=is_second_order,
+                                    update_grad=(idx + 1) % config.TRAIN.ACCUMULATION_STEPS == 0)
+            if (idx + 1) % config.TRAIN.ACCUMULATION_STEPS == 0:
+                optimizer.zero_grad()
+                lr_scheduler.step_update((epoch * num_steps + idx) // config.TRAIN.ACCUMULATION_STEPS)
+            loss_scale_value = loss_scaler.state_dict()["scale"]
 
         torch.cuda.synchronize()
 
@@ -261,9 +262,9 @@ def validate(config, data_loader, model):
         # compute output
         with torch.cuda.amp.autocast(enabled=config.AMP_ENABLE):
             output = model(images)
+            loss = criterion(output, target)
 
         # measure accuracy and record loss
-        loss = criterion(output, target)
         acc1 = accuracy(output, target)
 
         #acc1 = reduce_tensor(acc1)
@@ -327,6 +328,7 @@ if __name__ == '__main__':
         torch.cuda.set_device(config.LOCAL_RANK)
         torch.distributed.init_process_group(backend='nccl', init_method='env://', world_size=world_size, rank=rank)
     else:
+        torch.cuda.set_device(config.LOCAL_RANK)
         rank=0
         world_size=1
 
@@ -353,8 +355,8 @@ if __name__ == '__main__':
     config.freeze()
 
     os.makedirs(config.OUTPUT, exist_ok=True)
-    #logger = create_logger(output_dir=config.OUTPUT, dist_rank=rank, name=f"{config.MODEL.NAME}")
-    logger = create_logger(output_dir='/content/drive/MyDrive/SwaNet_NoGVI', dist_rank=rank, name=f"{config.MODEL.NAME}") #for colab training
+    logger = create_logger(output_dir=config.OUTPUT, dist_rank=rank, name=f"{config.MODEL.NAME}")
+    #logger = create_logger(output_dir='/content/drive/MyDrive/SwaNet_NoGVI', dist_rank=rank, name=f"{config.MODEL.NAME}") #for colab training
 
     if rank == 0:
         path = os.path.join(config.OUTPUT, "config.json")

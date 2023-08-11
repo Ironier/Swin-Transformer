@@ -10,6 +10,7 @@ import torch
 import numpy as np
 import torch.distributed as dist
 from torchvision import datasets, transforms
+from torchvision.transforms import functional as F
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.data import Mixup
 from timm.data import create_transform
@@ -22,6 +23,8 @@ from .cached_image_folder import CachedImageFolder
 from .imagenet22k_dataset import IN22KDATASET
 from .samplers import SubsetRandomSampler
 from .gid_dataset import GIDDATASET
+from .landslide_dataset import LandslideDataset
+from .sar_dataset import SARDataset
 
 try:
     from torchvision.transforms import InterpolationMode
@@ -107,7 +110,7 @@ def build_loader(config):
         batch_size=config.DATA.BATCH_SIZE,
         num_workers=config.DATA.NUM_WORKERS,
         pin_memory=config.DATA.PIN_MEMORY,
-        drop_last=True,
+        drop_last=False,
     )
 
     data_loader_val = torch.utils.data.DataLoader(
@@ -130,6 +133,108 @@ def build_loader(config):
 
     return dataset_train, dataset_val, data_loader_train, data_loader_val, mixup_fn
 
+class MultiTransform():
+    '''
+        To do the same enhance simultaneously for image and label.
+        args:
+            transform_list: [[tranform_function, param_function, param_arg, skip_key]
+                            for every transform]
+    '''
+    def __init__(self, transform_list=[]):
+        self.transform_list = transform_list
+
+    def __call__(self, **kwargs):
+        #transformed = {}
+        cnt = 0
+        for i in self.transform_list:
+            args = i[1](*i[2])
+            #print(i[0])
+            for k,v in kwargs.items():
+                if(k in i[3]):
+                    continue
+                #print(i[0], ' test ', k, type(v))
+                kwargs[k] = i[0](v, *args)
+                if(k=='mask'):
+                    cnt +=1
+                    #print(cnt,': ',kwargs[k].shape,end='\n')
+        return kwargs
+
+    def func_param_none():
+        return ()
+
+    def func_param_color_jitter(p):
+        return (torch.randperm(4),p,p,p,p)
+
+    def func_param_probability(p)->bool:
+        return torch.rand(1)<p
+
+    def func_param_random_crop(input_size, output_size,
+                padding=None, pad_if_needed=False, fill=0, padding_mode="constant"):
+        w, h = input_size
+        th, tw = output_size
+        if h + 1 < th or w + 1 < tw:
+            raise ValueError(
+                "Required crop size {} is larger then input image size {}".format((th, tw), (h, w))
+            )
+        if w == tw and h == th:
+            return 0, 0, h, w
+
+        i = torch.randint(0, h - th + 1, size=(1, )).item()
+        j = torch.randint(0, w - tw + 1, size=(1, )).item()
+        return input_size, padding, pad_if_needed, fill, padding_mode, i, j, th, tw
+
+    def func_param_const(*args):
+        return args
+
+
+    def func_hflip(tensor,flip):
+        if(flip):
+            return F.hflip(tensor)
+        return tensor
+
+    def func_vflip(tensor,flip):
+        if(flip):
+            return F.vflip(tensor)
+        return tensor
+
+    def func_normalize(tensor,mean=None,std=None):
+        if mean is None:
+            mean = torch.mean(tensor,dim=0,keepdim=True)
+        if std is None:
+            std = torch.std(tensor,dim=0,keepdim=True)
+            std[torch.where(std==0)] = 1
+        tensor = F.normalize(tensor,mean,std)
+       #tensor[torch.where(tensor==torch.inf)]=0
+        return tensor
+
+    def func_color_jitter(img, fn_idx, brightness_factor, contrast_factor, saturation_factor, hue_factor):
+        for fn_id in fn_idx:
+            if fn_id == 0 and brightness_factor is not None:
+                img = F.adjust_brightness(img, brightness_factor)
+            elif fn_id == 1 and contrast_factor is not None:
+                img = F.adjust_contrast(img, contrast_factor)
+            elif fn_id == 2 and saturation_factor is not None:
+                img = F.adjust_saturation(img, saturation_factor)
+            elif fn_id == 3 and hue_factor is not None:
+                img = F.adjust_hue(img, hue_factor)
+
+    def func_transpose(img):
+        return img.permute(1,2,0)
+
+    def func_crop(img, size, padding, pad_if_needed, fill, padding_mode, i, j, h, w):
+        if padding is not None:
+            img = F.pad(img, padding, fill, padding_mode)
+        width, height = F._get_image_size(img)
+        # pad the width if needed
+        if pad_if_needed and width < size[1]:
+            padding = [size[1] - width, 0]
+            img = F.pad(img, padding, fill, padding_mode)
+        # pad the height if needed
+        if pad_if_needed and height < size[0]:
+            padding = [0, size[0] - height]
+            img = F.pad(img, padding, fill, padding_mode)
+
+        return F.crop(img, i, j, h, w)
 
 def build_dataset(is_train, config, is_test=False):
     transform = build_transform(is_train, config)
@@ -163,6 +268,56 @@ def build_dataset(is_train, config, is_test=False):
             ann_file='val.txt'
         dataset = GIDDATASET(config.DATA.DATA_PATH, ann_file, gid_transform)
         nb_classes = 15
+
+    elif config.DATA.DATASET == 'landslide':
+        transform = MultiTransform([]) # 一定要创建个新的对象， 不然transform对象会混淆成一个
+        transform.transform_list += [[transforms.ToTensor(),
+                                    MultiTransform.func_param_none,(),()]]
+        transform.transform_list += [[transforms.Resize(config.DATA.IMG_SIZE, interpolation=_pil_interp(config.DATA.INTERPOLATION)),
+                                    MultiTransform.func_param_none,(),()]]
+        if is_train:
+            ann_directory=os.path.join('ImageSets','Segmentation','train')
+            transform.transform_list += [[MultiTransform.func_hflip,
+                                        MultiTransform.func_param_probability,
+                                        (config.AUG.REPROB,),()]]
+            transform.transform_list += [[MultiTransform.func_vflip,
+                                        MultiTransform.func_param_probability,
+                                        (config.AUG.REPROB,),()]]
+        else:
+            if is_test:
+                ann_directory=os.path.join('ImageSets','Segmentation','test')
+            else:
+                ann_directory=os.path.join('ImageSets','Segmentation','val')
+        transform.transform_list += [[MultiTransform.func_normalize,
+                                    MultiTransform.func_param_none,(),('mask',)]] #skip mask
+        transform.transform_list += [[MultiTransform.func_normalize,
+                                    MultiTransform.func_param_const,(-40.8,190.8),('image',)]] #skip image
+        dataset = LandslideDataset(config.DATA.DATA_PATH, ann_directory, transform)
+        nb_classes=-1
+
+    elif config.DATA.DATASET == 'sar':
+        transform = MultiTransform([]) # 一定要创建个新的对象， 不然transform对象会混淆成一个
+        transform.transform_list += [[transforms.ToTensor(),
+                                    MultiTransform.func_param_none,(),()]]
+        transform.transform_list += [[transforms.Resize(config.DATA.IMG_SIZE, interpolation=_pil_interp(config.DATA.INTERPOLATION)),
+                                    MultiTransform.func_param_none,(),()]]
+        transform.transform_list += [[MultiTransform.func_normalize,
+                                    MultiTransform.func_param_const,(IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD),('sar_images')]] #skip sar
+        if is_train:
+            ann_directory='train'
+            transform.transform_list += [[MultiTransform.func_hflip,
+                                        MultiTransform.func_param_probability,
+                                        (config.AUG.REPROB,),()]]
+            transform.transform_list += [[MultiTransform.func_vflip,
+                                        MultiTransform.func_param_probability,
+                                        (config.AUG.REPROB,),()]]
+        else:
+            if is_test:
+                ann_directory='test'
+            else:
+                ann_directory='train'
+        dataset = SARDataset(config.DATA.DATA_PATH, ann_directory, transform)
+        nb_classes=-1
     else:
         raise NotImplementedError("We only support ImageNet Now.")
 
@@ -188,6 +343,8 @@ def build_transform(is_train, config):
             is_training=True,
             color_jitter=config.AUG.COLOR_JITTER if config.AUG.COLOR_JITTER > 0  else None,
             auto_augment=config.AUG.AUTO_AUGMENT if config.AUG.AUTO_AUGMENT!= 'none' else None,
+            mean=IMAGENET_DEFAULT_MEAN,
+            std=IMAGENET_DEFAULT_STD,
             re_prob=config.AUG.REPROB,
             re_mode=config.AUG.REMODE,
             re_count=config.AUG.RECOUNT,

@@ -51,7 +51,7 @@ class SARDataset(data.Dataset):
         im_path = os.path.join(self.dir_path,'opt_cloudy','S2_'+self.data_keys[index]+'.png')
         images = self._load_image(im_path)
         if(self.ann_directory == 'test'):
-            targets = np.random.randint(low=0,high=255,size=images.shape)
+            targets = np.zeros_like(images,dtype=np.float64)
         else:
             im_path = os.path.join(self.dir_path,'opt_clear','S2_'+self.data_keys[index]+'.png')
             targets = self._load_image(im_path)
@@ -62,7 +62,7 @@ class SARDataset(data.Dataset):
             sar_images = transformed['sar_images']
             targets = transformed['mask']
 
-        return images, sar_images, targets
+        return images, sar_images, targets, index
 
     def __len__(self):
         return len(self.data_keys)

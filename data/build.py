@@ -110,7 +110,7 @@ def build_loader(config):
         batch_size=config.DATA.BATCH_SIZE,
         num_workers=config.DATA.NUM_WORKERS,
         pin_memory=config.DATA.PIN_MEMORY,
-        drop_last=False,
+        drop_last=True,
     )
 
     data_loader_val = torch.utils.data.DataLoader(
@@ -145,7 +145,7 @@ class MultiTransform():
 
     def __call__(self, **kwargs):
         #transformed = {}
-        cnt = 0
+        #cnt = 0
         for i in self.transform_list:
             args = i[1](*i[2])
             #print(i[0])
@@ -154,8 +154,8 @@ class MultiTransform():
                     continue
                 #print(i[0], ' test ', k, type(v))
                 kwargs[k] = i[0](v, *args)
-                if(k=='mask'):
-                    cnt +=1
+                # if(k=='mask'):
+                #     cnt +=1
                     #print(cnt,': ',kwargs[k].shape,end='\n')
         return kwargs
 
@@ -315,7 +315,7 @@ def build_dataset(is_train, config, is_test=False):
             if is_test:
                 ann_directory='test'
             else:
-                ann_directory='train'
+                ann_directory='val'
         dataset = SARDataset(config.DATA.DATA_PATH, ann_directory, transform)
         nb_classes=-1
     else:

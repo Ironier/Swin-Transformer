@@ -5,28 +5,30 @@ TRAIN:
   LR_SCHEDULER:
     DECAY_RATE: 0.8
     DECAY_EPOCHS: 40
-  BASE_LR: 6e-6
-  WARMUP_LR: 5e-6
-  MIN_LR: 5e-6
+  BASE_LR: 3e-4
+  WARMUP_LR: 1e-5
+  MIN_LR: 1e-5
   WEIGHT_DECAY: 1e-2
   EPOCHS: 300
+  CLIP_GRAD: 2.0
 DATA:
   IMG_SIZE: 512
   DATASET: sar
-  BATCH_SIZE: 2
+  BATCH_SIZE: 1
 MODEL:
   TYPE: sarnet
   NAME: sarnet_v1
   NUM_CLASSES: 15
   DROP_PATH_RATE: 0.3
   SWINV2:
-    EMBED_DIM: 32
-    DEPTHS: [ 2, 2, 4, 2 ]
-    NUM_HEADS: [ 4, 4, 4, 4 ]
+    EMBED_DIM: 4
+    DEPTHS: [ 2, 2, 8, 2 ]
+    NUM_HEADS: [ 2, 2, 2, 2 ]
     WINDOW_SIZE: 8
+    PATCH_SIZE: 8
   DECODER:
     DEPTH: [3, 2, 1]
     GVI_NUMS: [8, 16, 24]
     FEATURES: [64, 128, 256]
-PRINT_FREQ: 1
+PRINT_FREQ: 4
 SAVE_FREQ: 20

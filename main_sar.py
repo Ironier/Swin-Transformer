@@ -123,7 +123,7 @@ def main(config):
     elif config.MODEL.LABEL_SMOOTHING > 0.:
         criterion = LabelSmoothingCrossEntropy(smoothing=config.MODEL.LABEL_SMOOTHING)
     else:
-        criterion = torch.nn.CrossEntropyLoss()
+        criterion = torch.nn.MSELoss()
 
     max_accuracy = 0.0
 
@@ -196,7 +196,7 @@ def train_one_epoch(config, model, criterion, data_loader, optimizer, epoch, mix
 
     start = time.time()
     end = time.time()
-    for idx, (samples,sar_images, targets) in enumerate(data_loader):
+    for idx, (samples,sar_images, targets, _) in enumerate(data_loader):
         samples = samples.cuda(non_blocking=True)
         sar_images = sar_images.cuda(non_blocking=True)
         targets = targets.cuda(non_blocking=True)
@@ -330,7 +330,7 @@ class SSIM(torch.nn.Module):
         self.window = create_window(window_size)
 
     def forward(self, img1, img2):
-        (_, channel, _, _) = img1.size()
+        (_, channel, _, _) = img1.shape
 
         if channel == self.channel and self.window.dtype == img1.dtype:
             window = self.window
@@ -343,11 +343,11 @@ class SSIM(torch.nn.Module):
 ssim_handler = SSIM()
 def accuracy(output,target):
      #100*torch.sum(output.argmax(dim=1)==target,dim=[0,1,2])/(output.shape[0]*output.shape[2]*output.shape[3])
-    return ssim_handler(output, target)
+    return 100*ssim_handler(output.permute, target)
 
 @torch.no_grad()
 def validate(config, data_loader, model):
-    criterion = torch.nn.CrossEntropyLoss()
+    criterion = torch.nn.MSELoss()
     model.eval()
 
     batch_time = AverageMeter()
@@ -355,7 +355,7 @@ def validate(config, data_loader, model):
     acc1_meter = AverageMeter()
 
     end = time.time()
-    for idx, (images,sar_images, target) in enumerate(data_loader):
+    for idx, (images, sar_images, target, _) in enumerate(data_loader):
         images = images.cuda(non_blocking=True)
         sar_images = sar_images.cuda(non_blocking=True)
         target = target.cuda(non_blocking=True)

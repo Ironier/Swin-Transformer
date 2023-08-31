@@ -739,14 +739,14 @@ class UnNamedBlock(nn.Module):
 
         def __init__(self,depth=2,feature_nums=3,img_size=256,embed_dim=96,
                             drop=0.1, attn_drop=0.1,
-                            norm_layer=nn.LayerNorm,upsample_size=128):
+                            norm_layer=nn.LayerNorm,upsample_size=64):
             super().__init__()
             self.feature_nums=feature_nums
             self.img_size = img_size
             self.depth=depth
             #self.swablock=ShiftWindowAttentionBlock(img_size=img_size,feature_size=img_size,num_head=feature_nums,drop=attn_drop)
             self.aspp=ASPP(feature_nums,embed_dim,[1,4,6])
-            self.upsample=PSPUpsample(embed_dim,embed_dim*2,upsample_size//self.img_size)
+            self.upsample=PSPUpsample(embed_dim,embed_dim,upsample_size//self.img_size)
             #self.conv=nn.Conv2d(in_channels=feature_nums*4//(2**depth),out_channels=feature_nums*2//(2**depth),kernel_size=3,padding=1)
 
 
@@ -787,26 +787,30 @@ class Decoder(nn.Module):
             for i in range(self.num_layers):
                 layer=UnNamedBlock(depth=i+1,feature_nums=embed_dim*2**i,img_size=(self.img_size//self.patch_size)//2**i,embed_dim=embed_dim,
                                         drop=drop_rate, attn_drop=attn_drop,
-                                        norm_layer=norm_layer)
+                                        norm_layer=norm_layer,
+                                        upsample_size=self.img_size//self.patch_size)
                 self.layers.append(layer)
             self.patch_embed = PatchEmbed(
             img_size=img_size, patch_size=patch_size, in_chans=embed_dim, embed_dim=embed_dim,norm_layer=norm_layer)
 
-            self.pspmodule=PSPModule(features=embed_dim,out_features=embed_dim)
+            self.pspmodule=PSPModule(features=embed_dim,out_features=embed_dim*2)
             #self.upsample1=PSPUpsample(embed_dim, embed_dim*6, 8)
             #self.drop1=nn.Dropout2d(drop_rate)
 
-            self.conv2d_1=nn.Conv2d(embed_dim*2,embed_dim*2,kernel_size=3,padding=1,stride=1)
-            self.conv2d_2=nn.Conv2d(embed_dim*2,3,kernel_size=1,stride=1)
-            self.norm=nn.BatchNorm2d(embed_dim*2)
+            self.conv2d_1=nn.Conv2d(embed_dim*2,embed_dim,kernel_size=3,padding=1,stride=1)
+            self.conv2d_2=nn.Conv2d(embed_dim,3,kernel_size=1,stride=1)
+            self.norm=nn.BatchNorm2d(embed_dim)
             self.relu=nn.ReLU()
-            self.upsample3=PSPUpsample(embed_dim*10,embed_dim*4)
+            self.upsample3=PSPUpsample(embed_dim*7,embed_dim*2, 2)
             self.drop3=nn.Dropout2d(drop_rate)
-            self.upsample4=PSPUpsample(embed_dim*4,embed_dim*2)
-            self.drop4=nn.Dropout2d(drop_rate)
+            self.upsample4=nn.ConvTranspose2d(embed_dim*2,embed_dim,kernel_size=2,padding=0,stride=2)
+            self.upsample5=PSPUpsample(embed_dim*2,embed_dim*2,2)
+            self.upsample6=PSPUpsample(embed_dim*3,embed_dim*2,2)
+            self.drop6=nn.Dropout2d(drop_rate)
+
             #self.drop=nn.Dropout(drop_rate)
             #self.mlp_classifier=Mlp(in_features=self.num_layers,hidden_features=128,out_features=1,drop=drop_rate)
-            #self.softmax=nn.LogSoftmax(1)
+            #self.log_softmax=nn.LogSoftmax(1)
 
         def forward(self,x,feature):
             res=None
@@ -825,14 +829,17 @@ class Decoder(nn.Module):
 
             output=self.upsample3(res)
             output=self.drop3(output)
+
+            res=self.upsample5(output)
             output=self.upsample4(output)
-            output=self.drop4(output)
+            output = torch.cat([output,res],dim=1)
+            output=self.drop6(output)
+            output=self.upsample6(output)
 
             output=self.conv2d_1(output)
-            output=self.norm(output)
+            self.norm(output)
             output=self.relu(output)
             output=self.conv2d_2(output)
-            #output=self.softmax(output)
 
             return output
 
@@ -1023,10 +1030,10 @@ class SARNet(nn.Module):
         B2,C2,H2,W2 = sar_images.shape
         out = torch.zeros((B1,C1*C2,H2,W2)).cuda()
         for i in range(C1*C2):
-            out[:,i,:,:] = x[:,i//C2,:,:]-sar_images[:,i%C2,:,:]
+            out[:,i,:,:] = x[:,i//C2,:,:]+sar_images[:,i%C2,:,:]
         out = self.conv1(out)
         sar_images = self.conv2(sar_images)
-        out = out + sar_images
+        out = out - sar_images
         return out
 
     def forward(self,x,sar_images):
